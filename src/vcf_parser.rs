@@ -4,11 +4,20 @@ use rust_htslib::bcf::record::GenotypeAllele;
 use rust_htslib::{bcf, bcf::Read};
 use std::path::Path;
 
+macro_rules! progress {
+    ($quiet:expr, $($arg:tt)*) => {
+        if !$quiet {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 pub fn parse_vcf(
     path: &Path,
     min_depth: u32,
     min_gq: u32,
     snps_only: bool,
+    quiet: bool,
 ) -> Result<Vec<Variant>> {
     let mut reader = bcf::Reader::from_path(path).context("Failed to open VCF file")?;
 
@@ -21,8 +30,8 @@ pub fn parse_vcf(
     }
 
     let sample_names: Vec<_> = header.samples().iter().map(|s| String::from_utf8_lossy(s).to_string()).collect();
-    eprintln!("Sample 0: {}", sample_names[0]);
-    eprintln!("Sample 1: {}", sample_names[1]);
+    progress!(quiet, "Sample 0: {}", sample_names[0]);
+    progress!(quiet, "Sample 1: {}", sample_names[1]);
 
     let mut variants = Vec::new();
     let mut total_count = 0;
@@ -31,7 +40,7 @@ pub fn parse_vcf(
     for result in reader.records() {
         total_count += 1;
         if total_count % 100_000 == 0 {
-            eprintln!("Processed {} variants...", total_count);
+            progress!(quiet, "Processed {} variants...", total_count);
         }
 
         let record = result.context("Failed to read VCF record")?;
@@ -154,9 +163,10 @@ pub fn parse_vcf(
         });
     }
 
-    eprintln!("Total variants: {}", total_count);
-    eprintln!("Filtered variants: {}", filtered_count);
-    eprintln!(
+    progress!(quiet, "Total variants: {}", total_count);
+    progress!(quiet, "Filtered variants: {}", filtered_count);
+    progress!(
+        quiet,
         "Retained variants: {} ({:.1}%)",
         variants.len(),
         100.0 * variants.len() as f64 / total_count as f64

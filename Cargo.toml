@@ -2,12 +2,32 @@
 name = "bsa-gprime"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0"
+description = "Calculate G-statistic and SNP indices for Bulk Segregant Analysis (BSA-Seq) data"
+readme = "README.md"
+keywords = ["bioinformatics", "bsa", "qtl", "genomics", "vcf"]
+categories = ["command-line-utilities", "science"]
+exclude = [
+    "results/",
+    "scripts/",
+    "data/",
+    ".serena/",
+    "rust_gprime_implementation_plan.md",
+    "*.csv",
+    "*.vcf",
+    "*.vcf.gz",
+    "*.png",
+    "*.pdf",
+]
 
 [dependencies]
 rust-htslib = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 csv = "1.3"
 anyhow = "1.0"
+statrs = "0.18"
+rayon = "1.10"
+indicatif = "0.17"
 
 [dev-dependencies]
 approx = "0.5"
