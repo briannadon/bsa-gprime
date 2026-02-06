@@ -291,7 +291,12 @@ fn main() -> Result<()> {
                 let n_s = args.bulk_size.unwrap() * args.ploidy as f64;
                 let avg_coverage = significance::compute_avg_coverage(&results);
                 progress!(args.quiet, "  Average coverage: {:.1}", avg_coverage);
-                significance::estimate_null_parametric(n_s, avg_coverage)
+                
+                // Compute Σkⱼ² for proper G' variance estimation (equation 12)
+                let smoothing_factor = smoothing::compute_smoothing_factor(&results, args.bandwidth);
+                progress!(args.quiet, "  Smoothing factor (Σkⱼ²): {:.4}", smoothing_factor);
+                
+                significance::estimate_null_parametric_gprime(n_s, avg_coverage, Some(smoothing_factor))
             }
             "nonparametric" => significance::estimate_null_nonparametric(&g_prime_values),
             _ => unreachable!(),

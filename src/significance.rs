@@ -4,14 +4,69 @@ use statrs::distribution::{ContinuousCDF, LogNormal};
 
 /// Estimate null distribution parameters using the parametric method (Magwene et al. 2011).
 ///
+/// This function estimates the null distribution for the **raw G-statistic** (unsmoothed).
+/// For smoothed G' values, use [`estimate_null_parametric_gprime`] instead.
+///
 /// * `n_s` - effective population size per bulk (individuals * ploidy)
-/// * `avg_coverage` - average read depth across all SNPs (both bulks combined)
+/// * `avg_coverage` - average read depth per bulk (not combined across both bulks)
+///
+/// Equations 8-9 from Magwene et al. (2011):
+/// - E[G] ≈ 1 + C/(2n_s)
+/// - Var[G] ≈ 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
 pub fn estimate_null_parametric(n_s: f64, avg_coverage: f64) -> NullDistributionParams {
-    let mean_raw = 1.0 + 1.0 / n_s + 1.0 / avg_coverage;
-    let var_raw = 2.0 + 4.0 / n_s + 2.0 / avg_coverage;
+    // Equation 8: E[G] = 1 + C/(2n_s)
+    let mean_g = 1.0 + avg_coverage / (2.0 * n_s);
+    
+    // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
+    let var_g = 2.0
+        + 1.0 / (2.0 * avg_coverage)
+        + (1.0 + 2.0 * avg_coverage) / n_s
+        + avg_coverage * (4.0 * n_s - 1.0) / (8.0 * n_s.powi(3));
+    
+    // Convert to log-normal parameters
+    let variance_ratio = var_g / (mean_g * mean_g);
+    let mu = variance_ratio.ln_1p() * -0.5 + mean_g.ln();
+    let sigma = variance_ratio.ln_1p().sqrt();
 
-    let variance_ratio = var_raw / (mean_raw * mean_raw);
-    let mu = variance_ratio.ln_1p() * -0.5 + mean_raw.ln();
+    NullDistributionParams { mu, sigma }
+}
+
+/// Estimate null distribution parameters for smoothed G' values using the parametric method.
+///
+/// This function accounts for the variance reduction from smoothing by applying
+/// a scaling factor based on the smoothing kernel.
+///
+/// * `n_s` - effective population size per bulk (individuals * ploidy)
+/// * `avg_coverage` - average read depth per bulk (not combined across both bulks)
+/// * `smoothing_factor` - scaling factor for variance reduction from smoothing.
+///   For a tricube kernel, this is approximately Σkⱼ² ≈ 0.5-0.7 depending on SNP density.
+///   If None, uses 1.0 (no smoothing correction).
+///
+/// Equation 12 from Magwene et al. (2011):
+/// - Var[G'] ≈ Var[G] × Σkⱼ²
+pub fn estimate_null_parametric_gprime(
+    n_s: f64,
+    avg_coverage: f64,
+    smoothing_factor: Option<f64>,
+) -> NullDistributionParams {
+    // Equation 8: E[G] = 1 + C/(2n_s)
+    // Mean is approximately unchanged by smoothing
+    let mean_g = 1.0 + avg_coverage / (2.0 * n_s);
+    
+    // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
+    let var_g = 2.0
+        + 1.0 / (2.0 * avg_coverage)
+        + (1.0 + 2.0 * avg_coverage) / n_s
+        + avg_coverage * (4.0 * n_s - 1.0) / (8.0 * n_s.powi(3));
+    
+    // Apply variance reduction from smoothing (equation 12)
+    // smoothing_factor = Σkⱼ² ≈ 0.5-0.7 for typical tricube kernels
+    let scale = smoothing_factor.unwrap_or(1.0);
+    let var_gprime = var_g * scale;
+    
+    // Convert to log-normal parameters
+    let variance_ratio = var_gprime / (mean_g * mean_g);
+    let mu = variance_ratio.ln_1p() * -0.5 + mean_g.ln();
     let sigma = variance_ratio.ln_1p().sqrt();
 
     NullDistributionParams { mu, sigma }
@@ -188,12 +243,40 @@ mod tests {
 
     #[test]
     fn test_parametric_null_basic() {
+        // Test with n_s=100, avg_coverage=100 (per bulk)
+        // Equation 8: E[G] = 1 + C/(2n_s) = 1 + 100/(2*100) = 1.5
+        // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
+        //             = 2 + 1/200 + 201/100 + 100*399/(8*1000000)
+        //             = 2 + 0.005 + 2.01 + 0.0049875 = 4.0199875
         let params = estimate_null_parametric(100.0, 100.0);
         // mu is negative because the log-normal location parameter accounts for variance
         assert!(params.mu.is_finite());
-        assert_relative_eq!(params.mu, -0.5262, epsilon = 0.01);
+        assert_relative_eq!(params.mu, -0.107, epsilon = 0.01);
         assert!(params.sigma > 0.0);
-        assert_relative_eq!(params.sigma, 1.045, epsilon = 0.01);
+        assert_relative_eq!(params.sigma, 1.012, epsilon = 0.01);
+    }
+
+    #[test]
+    fn test_parametric_null_gprime() {
+        // Test G' parametric estimation with smoothing factor
+        // With smoothing_factor=0.6, variance should be reduced
+        let params_raw = estimate_null_parametric(100.0, 100.0);
+        let params_gprime = estimate_null_parametric_gprime(100.0, 100.0, Some(0.6));
+        
+        // G' should have smaller sigma due to smoothing
+        assert!(params_gprime.sigma < params_raw.sigma);
+        assert!(params_gprime.sigma > 0.0);
+    }
+
+    #[test]
+    fn test_parametric_null_gprime_default() {
+        // Test G' parametric estimation with default smoothing factor (1.0)
+        // Should be same as raw G
+        let params_raw = estimate_null_parametric(100.0, 100.0);
+        let params_gprime = estimate_null_parametric_gprime(100.0, 100.0, None);
+        
+        assert_relative_eq!(params_raw.mu, params_gprime.mu, epsilon = 0.001);
+        assert_relative_eq!(params_raw.sigma, params_gprime.sigma, epsilon = 0.001);
     }
 
     #[test]

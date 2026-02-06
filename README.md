@@ -175,12 +175,34 @@ The significance testing pipeline follows Magwene et al. (2011):
 1. **Tricube kernel smoothing**: G-statistics are smoothed per-chromosome using a tricube kernel with a configurable bandwidth (default 1 Mb). This produces the G' statistic.
 
 2. **Null distribution estimation**: The null distribution of G' is modeled as log-normal. Two methods are available:
-   - **Non-parametric** (default): Robust estimation from the observed G' distribution using the median and left-MAD, with Hampel's outlier rule to exclude QTL signals.
-   - **Parametric**: Requires `--bulk-size` (and optionally `--ploidy`). Computes expected mean and variance of G under the null from the effective population size and average coverage.
+   - **Non-parametric** (default): Robust estimation from the observed G' distribution using the median and left-MAD, with Hampel's outlier rule to exclude QTL signals. This method is recommended for most use cases as it directly estimates the null distribution from the data.
+   - **Parametric**: Requires `--bulk-size` (and optionally `--ploidy`). Computes expected mean and variance using equations 8-9 from Magwene et al. (2011):
+     - **Equation 8**: E[G] = 1 + C/(2n_s)
+     - **Equation 9**: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
+     - For smoothed G' values, variance is scaled by Σkⱼ² (sum of squared normalized kernel weights) per equation 12. The implementation computes Σkⱼ² automatically from the SNP density and smoothing window.
 
 3. **P-value computation**: Survival function (1 - CDF) of the fitted log-normal distribution evaluated at each G' value.
 
 4. **FDR correction**: Benjamini-Hochberg procedure to control the false discovery rate. SNPs with q-value below the threshold (default 0.05) are marked as significant.
+
+### Statistical Details
+
+The implementation provides:
+- `estimate_null_parametric()`: For raw G-statistics (equations 8-9)
+- `estimate_null_parametric_gprime()`: For smoothed G' values (accounts for variance reduction via Σkⱼ²)
+- `compute_smoothing_factor()`: Computes average Σkⱼ² across all SNPs based on tricube kernel weights
+
+The Σkⱼ² (sum of squared normalized kernel weights) is computed as:
+- kⱼ = wⱼ / Σwⱼ (normalized tricube weights)
+- Σkⱼ² = Σwⱼ² / (Σwⱼ)²
+
+For typical SNP densities (1 SNP per 1-10 kb), Σkⱼ² ranges from 0.1 to 0.5, meaning smoothing reduces variance by a factor of 2-10.
+
+The non-parametric method (`estimate_null_nonparametric()`) is generally preferred as it:
+- Works directly on observed G' values
+- Is robust to outliers (QTL peaks are trimmed by Hampel's rule)
+- Doesn't require estimating window sizes or SNP densities
+- Matches the validation in Figure S1 of Magwene et al. (2011)
 
 ## Visualization
 

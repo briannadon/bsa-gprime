@@ -12,6 +12,84 @@ fn tricube(u: f64) -> f64 {
     }
 }
 
+/// Compute Σkⱼ² (sum of squared normalized kernel weights) for variance estimation.
+///
+/// This is needed for equation 12 from Magwene et al. (2011):
+/// Var[G'] ≈ Var[G] × Σkⱼ²
+///
+/// The tricube kernel weights are: kⱼ = (1 - Dⱼ³)³ / S_W
+/// where S_W = Σ(1 - Dⱼ³)³ is the normalization factor
+///
+/// Returns the average Σkⱼ² across all SNPs, which can be used to scale
+/// the parametric null distribution for smoothed G' values.
+pub fn compute_smoothing_factor(results: &[GStatisticResult], bandwidth: u64) -> f64 {
+    let n = results.len();
+    if n == 0 {
+        return 1.0;
+    }
+
+    // Collect chromosome boundary ranges
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut chrom_start = 0;
+    while chrom_start < n {
+        let chrom = &results[chrom_start].variant.chrom;
+        let mut chrom_end = chrom_start;
+        while chrom_end < n && results[chrom_end].variant.chrom == *chrom {
+            chrom_end += 1;
+        }
+        ranges.push((chrom_start, chrom_end));
+        chrom_start = chrom_end;
+    }
+
+    let bw = bandwidth as f64;
+    let mut sum_k_squared = 0.0;
+    let mut count = 0.0;
+
+    for (start, end) in ranges.iter() {
+        // Two-pointer window bounds
+        let mut left = *start;
+        let mut right = *start;
+
+        for i in *start..*end {
+            let center_pos = results[i].variant.pos as f64;
+
+            // Advance left pointer
+            while left < *end && (results[left].variant.pos as f64) < center_pos - bw {
+                left += 1;
+            }
+
+            // Advance right pointer
+            while right < *end && (results[right].variant.pos as f64) <= center_pos + bw {
+                right += 1;
+            }
+
+            // Compute Σwⱼ and Σwⱼ² for this window
+            let mut sum_w = 0.0;
+            let mut sum_w_sq = 0.0;
+            for j in left..right {
+                let dist = (results[j].variant.pos as f64 - center_pos) / bw;
+                let w = tricube(dist);
+                sum_w += w;
+                sum_w_sq += w * w;
+            }
+
+            // Normalized weights: kⱼ = wⱼ / Σw
+            // Σkⱼ² = Σ(wⱼ²) / (Σw)²
+            if sum_w > 0.0 {
+                let sum_k_sq = sum_w_sq / (sum_w * sum_w);
+                sum_k_squared += sum_k_sq;
+            }
+            count += 1.0;
+        }
+    }
+
+    if count > 0.0 {
+        sum_k_squared / count
+    } else {
+        1.0
+    }
+}
+
 /// Smooth G-statistics using a tricube kernel, operating per-chromosome.
 ///
 /// Assumes `results` are sorted by (chrom, pos) as they come from a sorted VCF.
@@ -190,5 +268,44 @@ mod tests {
         // The spike at position 300 should be smoothed down
         assert!(g_prime[2] < 100.0);
         assert!(g_prime[2] > 1.0);
+    }
+
+    #[test]
+    fn test_compute_smoothing_factor() {
+        // Test that Σkⱼ² is computed correctly
+        // Using 5 SNPs all at very similar positions with 1MB bandwidth
+        // All SNPs are within the window, weights are equal
+        let results = vec![
+            make_result("chr1", 100, 1.0),
+            make_result("chr1", 200, 1.0),
+            make_result("chr1", 300, 1.0),
+            make_result("chr1", 400, 1.0),
+            make_result("chr1", 500, 1.0),
+        ];
+        let factor = compute_smoothing_factor(&results, 1_000_000);
+        // With 5 SNPs all in the window, each gets weight ~1, normalized kⱼ = 1/5
+        // Σkⱼ² = 5 × (1/5)² = 0.2
+        assert_relative_eq!(factor, 0.2, epsilon = 0.01);
+    }
+
+    #[test]
+    fn test_compute_smoothing_factor_sparse() {
+        // Test with sparse SNPs - larger Σkⱼ² (fewer SNPs in window)
+        let results = vec![
+            make_result("chr1", 100, 1.0),
+            make_result("chr1", 200, 1.0),
+            make_result("chr1", 1000000, 1.0),  // Far apart
+            make_result("chr1", 1000100, 1.0),
+            make_result("chr1", 1000200, 1.0),
+        ];
+        let factor = compute_smoothing_factor(&results, 1000);  // 1kb bandwidth
+        // With only 2 SNPs in each local window, Σkⱼ² ≈ 2 × (1/2)² = 0.5
+        assert!(factor > 0.3 && factor < 0.7);
+    }
+
+    #[test]
+    fn test_compute_smoothing_factor_empty() {
+        let factor = compute_smoothing_factor(&[], 1_000_000);
+        assert_relative_eq!(factor, 1.0, epsilon = 0.001);
     }
 }
