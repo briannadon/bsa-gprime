@@ -72,12 +72,192 @@ pub fn estimate_null_parametric_gprime(
     NullDistributionParams { mu, sigma }
 }
 
-/// Estimate null distribution parameters using the non-parametric method.
+/// Estimate null distribution parameters using the robust non-parametric method.
 ///
-/// Uses Hampel's outlier rule with left-MAD to robustly estimate the
-/// null distribution from observed smoothed G' values.
+/// Implements the "robust empirical estimator" from Magwene et al. (2011) step 3b.
+/// This method infers the null distribution from observed G' data by:
+/// 1. Log-transforming G' values
+/// 2. Computing median and left-MAD
+/// 3. Applying Hampel's rule to identify and remove outliers (QTL regions)
+/// 4. Estimating mode from trimmed data
+/// 5. Computing log-normal parameters from median and mode
+///
+/// The observed G' data is a mixture of:
+/// - Null distribution (non-QTL regions) - log-normal
+/// - Contaminating distributions (QTL regions) - higher means
+///
+/// By removing outliers, we isolate the null distribution and estimate its
+/// parameters robustly without requiring prior knowledge of n_s or C.
+///
+/// References:
+/// - Magwene et al. (2011) PLoS Comput Biol 7(11): e1002255
+/// - Bickel DR, Fruehwirth R (2006) Comput Stat Data An 50: 3500-3530
+pub fn estimate_null_robust(g_prime_values: &[f64]) -> NullDistributionParams {
+    // Step 1: Log-transform the G' values
+    // W_G' = ln(X_G')
+    let mut log_g: Vec<f64> = g_prime_values
+        .iter()
+        .filter(|&&g| g > 0.0)
+        .map(|&g| g.ln())
+        .collect();
+
+    if log_g.is_empty() {
+        return NullDistributionParams {
+            mu: 0.0,
+            sigma: 1.0,
+        };
+    }
+
+    // Keep a copy of original (non-log) values for mode estimation
+    let original_values: Vec<f64> = g_prime_values
+        .iter()
+        .filter(|&&g| g > 0.0)
+        .copied()
+        .collect();
+
+    log_g.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mut orig_sorted = original_values.clone();
+    orig_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    // Step 2: Compute median and left-MAD
+    // s_W = MAD_l(W_G') = Median(|w_i - Median(W_G')|) for w_i <= Median
+    let median_log = compute_median(&log_g);
+    let left_mad = compute_left_mad(&log_g, median_log);
+
+    // Step 3: Apply Hampel's rule to identify outliers
+    // Outliers are w_i such that w_i > Median + g(N,α) * MAD_l
+    // where g(N,α) ≈ 5.2 for normally distributed data
+    let hampel_threshold = 5.2 * left_mad;
+    
+    // Find the cutoff: values above (median + 5.2 * MAD) are outliers
+    let log_cutoff = median_log + hampel_threshold;
+    let orig_cutoff = log_cutoff.exp();
+
+    // Step 4: Trim outliers from both log-transformed and original values
+    let trimmed_log: Vec<f64> = log_g
+        .iter()
+        .filter(|&&w| w <= log_cutoff)
+        .copied()
+        .collect();
+
+    let trimmed_orig: Vec<f64> = orig_sorted
+        .iter()
+        .filter(|&&g| g <= orig_cutoff)
+        .copied()
+        .collect();
+
+    if trimmed_log.len() < 3 || trimmed_orig.len() < 3 {
+        // Not enough data after trimming, fall back to MAD-based estimation
+        return NullDistributionParams {
+            mu: median_log,
+            sigma: 1.4826 * left_mad,
+        };
+    }
+
+    // Compute statistics from trimmed data
+    let trimmed_log_median = compute_median(&trimmed_log);
+    let trimmed_log_mad = compute_left_mad(&trimmed_log, trimmed_log_median);
+
+    // Estimate mode from trimmed original values using kernel density estimation
+    // Mode_r(X_T) - robust mode estimator from Bickel & Fruehwirth (2006)
+    let mode = estimate_mode_robust(&trimmed_orig);
+
+    // Step 5: Compute log-normal parameters
+    // For a log-normal distribution:
+    // - Median = exp(μ) => μ = ln(Median)
+    // - Mode = exp(μ - σ²) => σ² = μ - ln(Mode)
+    //
+    // From the trimmed log data:
+    // μ = trimmed_log_median
+    //
+    // From mode estimation on original trimmed data:
+    // σ² = μ - ln(Mode)
+    //
+    // Convert to μ and σ for log-normal parameterization
+    let mu = trimmed_log_median;
+    let sigma_sq = (mu - mode.ln()).abs();
+    let sigma = sigma_sq.sqrt();
+
+    // Ensure sigma is valid
+    if sigma.is_nan() || sigma == 0.0 {
+        NullDistributionParams {
+            mu: trimmed_log_median,
+            sigma: 1.4826 * trimmed_log_mad,
+        }
+    } else {
+        NullDistributionParams { mu, sigma }
+    }
+}
+
+/// Robust mode estimator using kernel density estimation.
+///
+/// Implements a simplified version of the mode estimator from:
+/// Bickel DR, Fruehwirth R (2006) "On a fast, robust estimator of the mode"
+/// Computational Statistics & Data Analysis 50: 3500-3530
+///
+/// Uses a Gaussian kernel with Silverman's rule of thumb for bandwidth selection.
+fn estimate_mode_robust(values: &[f64]) -> f64 {
+    let n = values.len();
+    if n == 0 {
+        return 1.0; // Default mode
+    }
+
+    // Compute mean and standard deviation
+    let mean: f64 = values.iter().sum::<f64>() / n as f64;
+    let variance: f64 = values
+        .iter()
+        .map(|v| (v - mean).powi(2))
+        .sum::<f64>()
+        / n as f64;
+    let std = variance.sqrt();
+
+    if std == 0.0 {
+        return mean;
+    }
+
+    // Silverman's rule of thumb for bandwidth
+    // h = 1.06 * σ * n^(-1/5)
+    let h = 1.06 * std * (n as f64).powf(-0.2);
+
+    // Find the value that maximizes the kernel density
+    // Use the data range as search bounds
+    let min_val = values[0];
+    let max_val = values[n - 1];
+
+    // Grid search for mode
+    let num_points = 100.min(n);
+    let step = (max_val - min_val) / (num_points as f64 - 1.0);
+
+    let mut max_density = f64::MIN_POSITIVE;
+    let mut mode_estimate = mean;
+
+    for i in 0..num_points {
+        let x = min_val + (i as f64) * step;
+        // Gaussian kernel
+        let density: f64 = values
+            .iter()
+            .map(|v| {
+                let z = (v - x) / h;
+                (-0.5 * z * z).exp() / (h * (2.0 * std::f64::consts::PI).sqrt())
+            })
+            .sum();
+
+        if density > max_density {
+            max_density = density;
+            mode_estimate = x;
+        }
+    }
+
+    mode_estimate
+}
+
+/// Legacy non-parametric estimator (uses MAD instead of mode).
+///
+/// This method uses the left-MAD to estimate sigma rather than mode estimation.
+/// For the full robust estimator with mode estimation, use [`estimate_null_robust`].
+#[deprecated(since = "0.1.0", note = "Use estimate_null_robust instead for full paper compliance")]
 pub fn estimate_null_nonparametric(g_prime_values: &[f64]) -> NullDistributionParams {
-    // Collect log(G') for G' > 0
+    // Step 1: Log-transform the G' values
     let mut log_g: Vec<f64> = g_prime_values
         .iter()
         .filter(|&&g| g > 0.0)
@@ -94,10 +274,10 @@ pub fn estimate_null_nonparametric(g_prime_values: &[f64]) -> NullDistributionPa
     log_g.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = compute_median(&log_g);
 
-    // Left-MAD: median of |log_g_i - median| for values <= median
+    // Step 2: Left-MAD computation
     let left_mad = compute_left_mad(&log_g, median);
 
-    // Hampel's rule: outlier if (log_g_i - median) > 5.2 * left_MAD
+    // Step 3: Hampel's rule
     let threshold = 5.2 * left_mad;
     let trimmed: Vec<f64> = log_g
         .iter()
@@ -374,5 +554,114 @@ mod tests {
         assert_relative_eq!(compute_median(&[1.0, 2.0, 3.0]), 2.0);
         assert_relative_eq!(compute_median(&[1.0, 2.0, 3.0, 4.0]), 2.5);
         assert_relative_eq!(compute_median(&[5.0]), 5.0);
+    }
+
+    #[test]
+    fn test_estimate_null_robust_basic() {
+        // Generate values from a known log-normal distribution
+        // LogNormal(mu=0.0, sigma=0.5) => median=1.0, mode=exp(-0.25)≈0.78
+        // Create synthetic log-normal data using Box-Muller transform
+        let mut values: Vec<f64> = Vec::with_capacity(1000);
+        let mut seed = 12345u64;
+        for _ in 0..1000 {
+            // Simple pseudo-random for reproducibility
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let x = (seed as f64 / u64::MAX as f64) * 2.0 * std::f64::consts::PI;
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let y = (seed as f64 / u64::MAX as f64);
+            let z = (-2.0 * y.ln()).sqrt() * x.cos();
+            values.push((0.0 + 0.5 * z).exp());
+        }
+        
+        let params = estimate_null_robust(&values);
+        // mu should be close to 0.0 (ln of median for LogNormal(0, 0.5))
+        assert_relative_eq!(params.mu, 0.0, epsilon = 0.2);
+        // sigma should be close to 0.5
+        assert_relative_eq!(params.sigma, 0.5, epsilon = 0.2);
+    }
+
+    #[test]
+    fn test_estimate_null_robust_with_outliers() {
+        // 95% null values (log-normal around G'=1-2)
+        let mut values: Vec<f64> = Vec::with_capacity(960);
+        let mut seed = 54321u64;
+        for _ in 0..950 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let x = (seed as f64 / u64::MAX as f64) * 2.0 * std::f64::consts::PI;
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let y = (seed as f64 / u64::MAX as f64);
+            let z = (-2.0 * y.ln()).sqrt() * x.cos();
+            values.push((0.0 + 0.3 * z).exp());
+        }
+        
+        // 5% QTL-like outliers (very high G' values)
+        values.extend(vec![10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0]);
+        
+        let params = estimate_null_robust(&values);
+        // mu should be estimated from the null bulk (around 0)
+        // not pulled up by the outliers
+        assert!(params.mu < 2.0, "mu should not be inflated by outliers: mu={}", params.mu);
+        assert!(params.sigma > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_null_robust_empty() {
+        let params = estimate_null_robust(&[]);
+        assert_eq!(params.mu, 0.0);
+        assert_eq!(params.sigma, 1.0);
+    }
+
+    #[test]
+    fn test_estimate_null_robust_all_zeros() {
+        let params = estimate_null_robust(&[0.0, 0.0, 0.0]);
+        // All zeros should return defaults
+        assert!(params.mu.is_finite());
+        assert!(params.sigma > 0.0);
+    }
+
+    #[test]
+    fn test_estimate_mode_robust_basic() {
+        // Mode of uniform-ish distribution
+        let values: Vec<f64> = vec![1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
+        let mode = estimate_mode_robust(&values);
+        // Mode should be somewhere in the middle
+        assert!(mode >= 1.0 && mode <= 4.0);
+    }
+
+    #[test]
+    fn test_estimate_mode_robust_constant() {
+        // All same values
+        let values: Vec<f64> = vec![5.0; 100];
+        let mode = estimate_mode_robust(&values);
+        assert_relative_eq!(mode, 5.0, epsilon = 0.01);
+    }
+
+    #[test]
+    fn test_robust_vs_legacy() {
+        // Both methods should give similar results for clean data
+        let values: Vec<f64> = (1..=100).map(|i| i as f64 * 0.1).collect();
+        
+        let robust = estimate_null_robust(&values);
+        let legacy = estimate_null_nonparametric(&values);
+        
+        // Should be reasonably close for clean data
+        assert_relative_eq!(robust.mu, legacy.mu, epsilon = 0.3);
+    }
+
+    #[test]
+    fn test_hampel_threshold_applied() {
+        // Create data with clear outliers
+        let mut values: Vec<f64> = vec![];
+        // Null region: values around 1.0-2.0
+        for i in 0..100 {
+            let val = 1.0 + (i as f64 / 10.0).floor() * 0.1;
+            values.push(val);
+        }
+        // Outliers: very high values
+        values.extend(vec![100.0; 20]);
+        
+        let params = estimate_null_robust(&values);
+        // After trimming outliers, mu should be close to ln(1-2) ≈ 0.3
+        assert!(params.mu < 1.0, "Outliers should be trimmed: mu={}", params.mu);
     }
 }

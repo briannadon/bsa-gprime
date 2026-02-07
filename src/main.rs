@@ -298,7 +298,7 @@ fn main() -> Result<()> {
                 
                 significance::estimate_null_parametric_gprime(n_s, avg_coverage, Some(smoothing_factor))
             }
-            "nonparametric" => significance::estimate_null_nonparametric(&g_prime_values),
+            "nonparametric" => significance::estimate_null_robust(&g_prime_values),
             _ => unreachable!(),
         };
         progress!(args.quiet, "  Null distribution: mu={:.4}, sigma={:.4}", null_params.mu, null_params.sigma);

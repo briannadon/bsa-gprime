@@ -187,10 +187,31 @@ The significance testing pipeline follows Magwene et al. (2011):
 
 ### Statistical Details
 
-The implementation provides:
-- `estimate_null_parametric()`: For raw G-statistics (equations 8-9)
-- `estimate_null_parametric_gprime()`: For smoothed G' values (accounts for variance reduction via Σkⱼ²)
-- `compute_smoothing_factor()`: Computes average Σkⱼ² across all SNPs based on tricube kernel weights
+The implementation provides three methods for estimating the null distribution:
+
+1. **`estimate_null_parametric()`**: For raw G-statistics using equations 8-9
+2. **`estimate_null_parametric_gprime()`**: For smoothed G' values, accounts for variance reduction via Σkⱼ²
+3. **`estimate_null_robust()`**: **Recommended** - Robust empirical estimator using Hampel's rule and mode estimation (step 3b of the paper's pipeline)
+
+#### Robust Empirical Estimator (Recommended)
+
+The robust estimator implements the full procedure from Magwene et al. (2011) step 3b:
+
+1. **Log-transform**: W_G' = ln(G'_observed)
+2. **Compute median & left-MAD**: MAD_l(W_G') = Median(|w_i - Median|) for w_i ≤ Median
+3. **Apply Hampel's rule**: Remove outliers where w_i > Median + 5.2 × MAD_l
+4. **Estimate mode**: Using kernel density estimation on trimmed data
+5. **Compute log-normal parameters**:
+   - μ = ln(Median of trimmed original values)
+   - σ² = μ - ln(Mode)
+
+This approach:
+- Infers the null distribution from observed G' data **without requiring n_s or C**
+- Automatically identifies and removes QTL regions (as outliers)
+- Is robust to model violations in the hierarchical sampling
+- Matches Figure S1 validation from the original paper
+
+#### Smoothing Factor (Σkⱼ²)
 
 The Σkⱼ² (sum of squared normalized kernel weights) is computed as:
 - kⱼ = wⱼ / Σwⱼ (normalized tricube weights)
@@ -198,11 +219,7 @@ The Σkⱼ² (sum of squared normalized kernel weights) is computed as:
 
 For typical SNP densities (1 SNP per 1-10 kb), Σkⱼ² ranges from 0.1 to 0.5, meaning smoothing reduces variance by a factor of 2-10.
 
-The non-parametric method (`estimate_null_nonparametric()`) is generally preferred as it:
-- Works directly on observed G' values
-- Is robust to outliers (QTL peaks are trimmed by Hampel's rule)
-- Doesn't require estimating window sizes or SNP densities
-- Matches the validation in Figure S1 of Magwene et al. (2011)
+> **Note**: The parametric G' method uses Var[G'] ≈ Var[G] × Σkⱼ². The full equation 12 also includes a covariance term for linked SNPs, which is omitted for computational efficiency. This is a conservative approximation.
 
 ## Visualization
 
