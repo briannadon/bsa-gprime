@@ -12,16 +12,16 @@ use statrs::distribution::{ContinuousCDF, LogNormal};
 ///
 /// Equations 8-9 from Magwene et al. (2011):
 /// - E[G] ≈ 1 + C/(2n_s)
-/// - Var[G] ≈ 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
+/// - Var[G] ≈ 2 + 1/(2C) + (1+2C)/n_s + C²(4n_s-1)/(8n_s³)
 pub fn estimate_null_parametric(n_s: f64, avg_coverage: f64) -> NullDistributionParams {
     // Equation 8: E[G] = 1 + C/(2n_s)
     let mean_g = 1.0 + avg_coverage / (2.0 * n_s);
     
-    // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
+    // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C²(4n_s-1)/(8n_s³)
     let var_g = 2.0
         + 1.0 / (2.0 * avg_coverage)
         + (1.0 + 2.0 * avg_coverage) / n_s
-        + avg_coverage * (4.0 * n_s - 1.0) / (8.0 * n_s.powi(3));
+        + avg_coverage.powi(2) * (4.0 * n_s - 1.0) / (8.0 * n_s.powi(3));
     
     // Convert to log-normal parameters
     let variance_ratio = var_g / (mean_g * mean_g);
@@ -34,35 +34,37 @@ pub fn estimate_null_parametric(n_s: f64, avg_coverage: f64) -> NullDistribution
 /// Estimate null distribution parameters for smoothed G' values using the parametric method.
 ///
 /// This function accounts for the variance reduction from smoothing by applying
-/// a scaling factor based on the smoothing kernel.
+/// equation 12 from Magwene et al. (2011):
+///
+/// Var[G'] = Var[G] × Σk_j² + C²(4n_s-1)/(8n_s³) × Σ_{i≠j}(1-2r_ij)²k_ik_j
 ///
 /// * `n_s` - effective population size per bulk (individuals * ploidy)
 /// * `avg_coverage` - average read depth per bulk (not combined across both bulks)
-/// * `smoothing_factor` - scaling factor for variance reduction from smoothing.
-///   For a tricube kernel, this is approximately Σkⱼ² ≈ 0.5-0.7 depending on SNP density.
+/// * `sum_k_squared` - Σk_j² from smoothing kernel (diagonal variance term).
 ///   If None, uses 1.0 (no smoothing correction).
-///
-/// Equation 12 from Magwene et al. (2011):
-/// - Var[G'] ≈ Var[G] × Σkⱼ²
+/// * `covariance_weight` - Σ_{i≠j}(1-2r_ij)²k_ik_j from smoothing kernel and
+///   recombination rates (off-diagonal covariance term). If None, uses 0.0.
 pub fn estimate_null_parametric_gprime(
     n_s: f64,
     avg_coverage: f64,
-    smoothing_factor: Option<f64>,
+    sum_k_squared: Option<f64>,
+    covariance_weight: Option<f64>,
 ) -> NullDistributionParams {
-    // Equation 8: E[G] = 1 + C/(2n_s)
+    // Equation 8: E[G'] ≈ E[G] = 1 + C/(2n_s)
     // Mean is approximately unchanged by smoothing
     let mean_g = 1.0 + avg_coverage / (2.0 * n_s);
     
-    // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
+    // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C²(4n_s-1)/(8n_s³)
     let var_g = 2.0
         + 1.0 / (2.0 * avg_coverage)
         + (1.0 + 2.0 * avg_coverage) / n_s
-        + avg_coverage * (4.0 * n_s - 1.0) / (8.0 * n_s.powi(3));
+        + avg_coverage.powi(2) * (4.0 * n_s - 1.0) / (8.0 * n_s.powi(3));
     
-    // Apply variance reduction from smoothing (equation 12)
-    // smoothing_factor = Σkⱼ² ≈ 0.5-0.7 for typical tricube kernels
-    let scale = smoothing_factor.unwrap_or(1.0);
-    let var_gprime = var_g * scale;
+    // Equation 12: full Var[G'] with diagonal and covariance terms
+    let s1 = sum_k_squared.unwrap_or(1.0);
+    let s2 = covariance_weight.unwrap_or(0.0);
+    let cov_factor = avg_coverage.powi(2) * (4.0 * n_s - 1.0) / (8.0 * n_s.powi(3));
+    let var_gprime = var_g * s1 + cov_factor * s2;
     
     // Convert to log-normal parameters
     let variance_ratio = var_gprime / (mean_g * mean_g);
@@ -378,14 +380,19 @@ pub fn benjamini_hochberg(p_values: &[f64]) -> Vec<f64> {
     q_values
 }
 
-/// Compute average coverage across all SNPs (sum of both bulks' DP / n).
+/// Compute average per-bulk coverage across all SNPs.
+///
+/// Returns the mean of (resistant_dp + susceptible_dp) / 2 across all sites,
+/// i.e. the average depth for a single bulk. This corresponds to C in
+/// equations 8-9 of Magwene et al. (2011), where each bulk is sequenced
+/// at average coverage C.
 pub fn compute_avg_coverage(results: &[GStatisticResult]) -> f64 {
     if results.is_empty() {
         return 0.0;
     }
     let total: f64 = results
         .iter()
-        .map(|r| (r.variant.resistant_dp + r.variant.susceptible_dp) as f64)
+        .map(|r| (r.variant.resistant_dp + r.variant.susceptible_dp) as f64 / 2.0)
         .sum();
     total / results.len() as f64
 }
@@ -425,23 +432,26 @@ mod tests {
     fn test_parametric_null_basic() {
         // Test with n_s=100, avg_coverage=100 (per bulk)
         // Equation 8: E[G] = 1 + C/(2n_s) = 1 + 100/(2*100) = 1.5
-        // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
-        //             = 2 + 1/200 + 201/100 + 100*399/(8*1000000)
-        //             = 2 + 0.005 + 2.01 + 0.0049875 = 4.0199875
+        // Equation 9: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C²(4n_s-1)/(8n_s³)
+        //             = 2 + 1/200 + 201/100 + 10000*399/(8*1000000)
+        //             = 2 + 0.005 + 2.01 + 0.49875 = 4.51375
         let params = estimate_null_parametric(100.0, 100.0);
-        // mu is negative because the log-normal location parameter accounts for variance
         assert!(params.mu.is_finite());
-        assert_relative_eq!(params.mu, -0.107, epsilon = 0.01);
         assert!(params.sigma > 0.0);
-        assert_relative_eq!(params.sigma, 1.012, epsilon = 0.01);
+        // Verify the log-normal parameters are consistent with E[G]=1.5, Var[G]=4.51375
+        // variance_ratio = 4.51375 / 2.25 = 2.0061..
+        // sigma = sqrt(ln(1 + 2.0061)) = sqrt(ln(3.0061)) = sqrt(1.1002) = 1.0489
+        // mu = ln(1.5) - 0.5 * ln(3.0061) = 0.4055 - 0.5501 = -0.1446
+        assert_relative_eq!(params.mu, -0.145, epsilon = 0.01);
+        assert_relative_eq!(params.sigma, 1.049, epsilon = 0.01);
     }
 
     #[test]
     fn test_parametric_null_gprime() {
-        // Test G' parametric estimation with smoothing factor
-        // With smoothing_factor=0.6, variance should be reduced
+        // Test G' parametric estimation with smoothing factors
+        // With sum_k_squared=0.6 and no covariance, variance should be reduced
         let params_raw = estimate_null_parametric(100.0, 100.0);
-        let params_gprime = estimate_null_parametric_gprime(100.0, 100.0, Some(0.6));
+        let params_gprime = estimate_null_parametric_gprime(100.0, 100.0, Some(0.6), None);
         
         // G' should have smaller sigma due to smoothing
         assert!(params_gprime.sigma < params_raw.sigma);
@@ -449,11 +459,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parametric_null_gprime_with_covariance() {
+        // Test that covariance term increases variance
+        let params_diag_only = estimate_null_parametric_gprime(100.0, 100.0, Some(0.2), Some(0.0));
+        let params_with_cov = estimate_null_parametric_gprime(100.0, 100.0, Some(0.2), Some(0.5));
+        
+        // Adding covariance weight should increase sigma
+        assert!(params_with_cov.sigma > params_diag_only.sigma);
+    }
+
+    #[test]
     fn test_parametric_null_gprime_default() {
-        // Test G' parametric estimation with default smoothing factor (1.0)
+        // Test G' parametric estimation with default smoothing (1.0, 0.0)
         // Should be same as raw G
         let params_raw = estimate_null_parametric(100.0, 100.0);
-        let params_gprime = estimate_null_parametric_gprime(100.0, 100.0, None);
+        let params_gprime = estimate_null_parametric_gprime(100.0, 100.0, None, None);
         
         assert_relative_eq!(params_raw.mu, params_gprime.mu, epsilon = 0.001);
         assert_relative_eq!(params_raw.sigma, params_gprime.sigma, epsilon = 0.001);
@@ -568,7 +588,7 @@ mod tests {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
             let x = (seed as f64 / u64::MAX as f64) * 2.0 * std::f64::consts::PI;
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let y = (seed as f64 / u64::MAX as f64);
+            let y = seed as f64 / u64::MAX as f64;
             let z = (-2.0 * y.ln()).sqrt() * x.cos();
             values.push((0.0 + 0.5 * z).exp());
         }
@@ -589,7 +609,7 @@ mod tests {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
             let x = (seed as f64 / u64::MAX as f64) * 2.0 * std::f64::consts::PI;
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let y = (seed as f64 / u64::MAX as f64);
+            let y = seed as f64 / u64::MAX as f64;
             let z = (-2.0 * y.ln()).sqrt() * x.cos();
             values.push((0.0 + 0.3 * z).exp());
         }

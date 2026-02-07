@@ -58,6 +58,11 @@ struct Args {
     #[arg(long, default_value = "2")]
     ploidy: u32,
 
+    /// Recombination rate in cM/Mb (required for full equation 12 covariance term
+    /// in parametric mode). If omitted, only the diagonal Σk_j² term is used.
+    #[arg(long)]
+    recombination_rate: Option<f64>,
+
     /// FDR threshold for significance calls
     #[arg(long, default_value = "0.05")]
     fdr_threshold: f64,
@@ -290,13 +295,26 @@ fn main() -> Result<()> {
             "parametric" => {
                 let n_s = args.bulk_size.unwrap() * args.ploidy as f64;
                 let avg_coverage = significance::compute_avg_coverage(&results);
-                progress!(args.quiet, "  Average coverage: {:.1}", avg_coverage);
+                progress!(args.quiet, "  Average per-bulk coverage (C): {:.1}", avg_coverage);
                 
-                // Compute Σkⱼ² for proper G' variance estimation (equation 12)
-                let smoothing_factor = smoothing::compute_smoothing_factor(&results, args.bandwidth);
-                progress!(args.quiet, "  Smoothing factor (Σkⱼ²): {:.4}", smoothing_factor);
+                // Compute smoothing factors for equation 12 (Var[G'] estimation)
+                let factors = smoothing::compute_smoothing_factors(
+                    &results, args.bandwidth, args.recombination_rate,
+                );
+                progress!(args.quiet, "  Smoothing factor (Σkⱼ²): {:.4}", factors.sum_k_squared);
+                if args.recombination_rate.is_some() {
+                    progress!(args.quiet, "  Recombination rate: {:.2} cM/Mb", args.recombination_rate.unwrap());
+                    progress!(args.quiet, "  Covariance weight: {:.4}", factors.covariance_weight);
+                } else {
+                    progress!(args.quiet, "  Covariance term: omitted (no --recombination-rate provided)");
+                }
                 
-                significance::estimate_null_parametric_gprime(n_s, avg_coverage, Some(smoothing_factor))
+                significance::estimate_null_parametric_gprime(
+                    n_s,
+                    avg_coverage,
+                    Some(factors.sum_k_squared),
+                    Some(factors.covariance_weight),
+                )
             }
             "nonparametric" => significance::estimate_null_robust(&g_prime_values),
             _ => unreachable!(),

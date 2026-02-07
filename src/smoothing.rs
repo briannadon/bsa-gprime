@@ -12,20 +12,38 @@ fn tricube(u: f64) -> f64 {
     }
 }
 
-/// Compute Σkⱼ² (sum of squared normalized kernel weights) for variance estimation.
+/// Smoothing factors needed for equation 12 (Var[G'] estimation).
+pub struct SmoothingFactors {
+    /// Average Σk_j² across all SNPs (diagonal variance term)
+    pub sum_k_squared: f64,
+    /// Average Σ_{i≠j} (1-2r_ij)² k_i k_j across all SNPs (covariance term from linkage)
+    pub covariance_weight: f64,
+}
+
+/// Compute smoothing factors for equation 12 from Magwene et al. (2011):
 ///
-/// This is needed for equation 12 from Magwene et al. (2011):
-/// Var[G'] ≈ Var[G] × Σkⱼ²
+/// Var[G'] = Var[G] × Σk_j² + C²(4n_s-1)/(8n_s³) × Σ_{i≠j}(1-2r_ij)²k_ik_j
 ///
-/// The tricube kernel weights are: kⱼ = (1 - Dⱼ³)³ / S_W
-/// where S_W = Σ(1 - Dⱼ³)³ is the normalization factor
+/// The tricube kernel weights are: k_j = (1 - D_j³)³ / S_W
+/// where S_W = Σ(1 - D_j³)³ is the normalization factor.
 ///
-/// Returns the average Σkⱼ² across all SNPs, which can be used to scale
-/// the parametric null distribution for smoothed G' values.
-pub fn compute_smoothing_factor(results: &[GStatisticResult], bandwidth: u64) -> f64 {
+/// * `recomb_rate_cm_per_mb` - recombination rate in cM/Mb, used to compute
+///   pairwise recombination fractions r_ij via the Haldane mapping function.
+///   If None, only the diagonal term (Σk_j²) is computed.
+///
+/// Returns `SmoothingFactors` with both the diagonal and covariance components,
+/// averaged across all SNPs.
+pub fn compute_smoothing_factors(
+    results: &[GStatisticResult],
+    bandwidth: u64,
+    recomb_rate_cm_per_mb: Option<f64>,
+) -> SmoothingFactors {
     let n = results.len();
     if n == 0 {
-        return 1.0;
+        return SmoothingFactors {
+            sum_k_squared: 1.0,
+            covariance_weight: 0.0,
+        };
     }
 
     // Collect chromosome boundary ranges
@@ -42,7 +60,13 @@ pub fn compute_smoothing_factor(results: &[GStatisticResult], bandwidth: u64) ->
     }
 
     let bw = bandwidth as f64;
-    let mut sum_k_squared = 0.0;
+
+    // Pre-compute Haldane factor for (1-2r)² = exp(-4 * d_Morgans)
+    // d_Morgans = d_bp * recomb_rate / 1e8  (cM/Mb × bp → cM → Morgans)
+    let haldane_factor = recomb_rate_cm_per_mb.map(|rate| 4.0 * rate / 1e8);
+
+    let mut total_sum_k_sq = 0.0;
+    let mut total_cov_weight = 0.0;
     let mut count = 0.0;
 
     for (start, end) in ranges.iter() {
@@ -63,30 +87,52 @@ pub fn compute_smoothing_factor(results: &[GStatisticResult], bandwidth: u64) ->
                 right += 1;
             }
 
-            // Compute Σwⱼ and Σwⱼ² for this window
+            // Compute unnormalized weights for this window
+            let window_size = right - left;
+            let mut weights: Vec<f64> = Vec::with_capacity(window_size);
             let mut sum_w = 0.0;
-            let mut sum_w_sq = 0.0;
             for j in left..right {
                 let dist = (results[j].variant.pos as f64 - center_pos) / bw;
                 let w = tricube(dist);
+                weights.push(w);
                 sum_w += w;
-                sum_w_sq += w * w;
             }
 
-            // Normalized weights: kⱼ = wⱼ / Σw
-            // Σkⱼ² = Σ(wⱼ²) / (Σw)²
             if sum_w > 0.0 {
-                let sum_k_sq = sum_w_sq / (sum_w * sum_w);
-                sum_k_squared += sum_k_sq;
+                let inv_sum_w = 1.0 / sum_w;
+
+                // Diagonal term: Σk_j² = Σ(w_j/Σw)²
+                let sum_k_sq: f64 = weights.iter().map(|&w| {
+                    let k = w * inv_sum_w;
+                    k * k
+                }).sum();
+                total_sum_k_sq += sum_k_sq;
+
+                // Covariance term: Σ_{j≠l} (1-2r_jl)² k_j k_l
+                // Using Haldane mapping: (1-2r)² = exp(-4 * d_Morgans)
+                if let Some(hf) = haldane_factor {
+                    let mut cov = 0.0;
+                    for j_idx in 0..window_size {
+                        let k_j = weights[j_idx] * inv_sum_w;
+                        let pos_j = results[left + j_idx].variant.pos as f64;
+                        for l_idx in (j_idx + 1)..window_size {
+                            let k_l = weights[l_idx] * inv_sum_w;
+                            let d_bp = (pos_j - results[left + l_idx].variant.pos as f64).abs();
+                            let linkage_sq = (-hf * d_bp).exp();
+                            cov += linkage_sq * k_j * k_l;
+                        }
+                    }
+                    // Factor of 2 for symmetry (j<l counted once, but sum is over all i≠j)
+                    total_cov_weight += 2.0 * cov;
+                }
             }
             count += 1.0;
         }
     }
 
-    if count > 0.0 {
-        sum_k_squared / count
-    } else {
-        1.0
+    SmoothingFactors {
+        sum_k_squared: if count > 0.0 { total_sum_k_sq / count } else { 1.0 },
+        covariance_weight: if count > 0.0 { total_cov_weight / count } else { 0.0 },
     }
 }
 
@@ -271,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_smoothing_factor() {
+    fn test_compute_smoothing_factors() {
         // Test that Σkⱼ² is computed correctly
         // Using 5 SNPs all at very similar positions with 1MB bandwidth
         // All SNPs are within the window, weights are equal
@@ -282,14 +328,16 @@ mod tests {
             make_result("chr1", 400, 1.0),
             make_result("chr1", 500, 1.0),
         ];
-        let factor = compute_smoothing_factor(&results, 1_000_000);
+        let factors = compute_smoothing_factors(&results, 1_000_000, None);
         // With 5 SNPs all in the window, each gets weight ~1, normalized kⱼ = 1/5
         // Σkⱼ² = 5 × (1/5)² = 0.2
-        assert_relative_eq!(factor, 0.2, epsilon = 0.01);
+        assert_relative_eq!(factors.sum_k_squared, 0.2, epsilon = 0.01);
+        // No recombination rate provided, covariance_weight should be 0
+        assert_relative_eq!(factors.covariance_weight, 0.0, epsilon = 1e-10);
     }
 
     #[test]
-    fn test_compute_smoothing_factor_sparse() {
+    fn test_compute_smoothing_factors_sparse() {
         // Test with sparse SNPs - larger Σkⱼ² (fewer SNPs in window)
         let results = vec![
             make_result("chr1", 100, 1.0),
@@ -298,14 +346,41 @@ mod tests {
             make_result("chr1", 1000100, 1.0),
             make_result("chr1", 1000200, 1.0),
         ];
-        let factor = compute_smoothing_factor(&results, 1000);  // 1kb bandwidth
+        let factors = compute_smoothing_factors(&results, 1000, None);  // 1kb bandwidth
         // With only 2 SNPs in each local window, Σkⱼ² ≈ 2 × (1/2)² = 0.5
-        assert!(factor > 0.3 && factor < 0.7);
+        assert!(factors.sum_k_squared > 0.3 && factors.sum_k_squared < 0.7);
     }
 
     #[test]
-    fn test_compute_smoothing_factor_empty() {
-        let factor = compute_smoothing_factor(&[], 1_000_000);
-        assert_relative_eq!(factor, 1.0, epsilon = 0.001);
+    fn test_compute_smoothing_factors_empty() {
+        let factors = compute_smoothing_factors(&[], 1_000_000, None);
+        assert_relative_eq!(factors.sum_k_squared, 1.0, epsilon = 0.001);
+        assert_relative_eq!(factors.covariance_weight, 0.0, epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_compute_smoothing_factors_with_recombination() {
+        // Test covariance term with recombination rate
+        // 5 tightly linked SNPs (100bp apart, high recomb rate won't matter much)
+        let results = vec![
+            make_result("chr1", 100, 1.0),
+            make_result("chr1", 200, 1.0),
+            make_result("chr1", 300, 1.0),
+            make_result("chr1", 400, 1.0),
+            make_result("chr1", 500, 1.0),
+        ];
+        // Very low recombination rate: SNPs are tightly linked
+        // (1-2r)² ≈ 1 for all pairs, so covariance_weight ≈ Σ_{i≠j} k_i k_j
+        // = (Σk_i)² - Σk_i² = 1 - 0.2 = 0.8
+        let factors_linked = compute_smoothing_factors(&results, 1_000_000, Some(0.001));
+        assert!(factors_linked.covariance_weight > 0.0);
+        assert_relative_eq!(factors_linked.covariance_weight, 0.8, epsilon = 0.01);
+        // sum_k_squared unchanged
+        assert_relative_eq!(factors_linked.sum_k_squared, 0.2, epsilon = 0.01);
+
+        // Very high recombination rate: SNPs are unlinked
+        // (1-2r)² ≈ 0 for all pairs, covariance_weight ≈ 0
+        let factors_unlinked = compute_smoothing_factors(&results, 1_000_000, Some(1e6));
+        assert_relative_eq!(factors_unlinked.covariance_weight, 0.0, epsilon = 0.01);
     }
 }
