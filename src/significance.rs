@@ -335,7 +335,10 @@ fn compute_left_mad(sorted: &[f64], median: f64) -> f64 {
 
 /// Compute p-values from smoothed G' values and null distribution parameters.
 ///
-/// p_value = 1 - CDF(G') under LogNormal(mu, sigma)
+/// p_value = 1 - CDF(G') = SF(G') under LogNormal(mu, sigma)
+///
+/// Uses the survival function (SF) directly rather than 1 - CDF to maintain
+/// precision for very small p-values (avoids catastrophic cancellation).
 pub fn compute_p_values(g_prime_values: &[f64], null: &NullDistributionParams) -> Vec<f64> {
     let dist = LogNormal::new(null.mu, null.sigma).expect("Invalid log-normal parameters");
 
@@ -345,7 +348,7 @@ pub fn compute_p_values(g_prime_values: &[f64], null: &NullDistributionParams) -
             if gp <= 0.0 {
                 1.0
             } else {
-                1.0 - dist.cdf(gp)
+                dist.sf(gp)
             }
         })
         .collect()

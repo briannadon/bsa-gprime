@@ -493,6 +493,21 @@ def main():
             fdr_threshold=args.fdr_threshold,
             max_chromosomes=args.max_chroms,
         )
+
+        # Also plot G' smoothed peaks when available
+        if "g_prime" in df.columns:
+            gprime_output = (
+                output_dir / f"{output_base}_gprime{output_ext}"
+                if args.output
+                else None
+            )
+            plot_qtl_manhattan(
+                df,
+                output_path=gprime_output,
+                threshold_percentile=args.threshold,
+                use_smoothed=True,
+                max_chromosomes=args.max_chroms,
+            )
     else:
         # Fall back to G-statistic / G' plot
         use_smoothed = "g_prime" in df.columns

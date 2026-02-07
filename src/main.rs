@@ -287,7 +287,7 @@ fn main() -> Result<()> {
         progress!(args.quiet);
         progress!(args.quiet, "Step 4: Smoothing G-statistics (tricube kernel, bandwidth={} bp)...", args.bandwidth);
         let pb_smooth = make_progress_bar(args.quiet, results.len() as u64);
-        let g_prime_values = smoothing::smooth_g_statistics(&results, args.bandwidth);
+        let g_prime_values = smoothing::smooth_g_statistics(&results, args.bandwidth, Some(&pb_smooth));
         pb_smooth.finish_and_clear();
 
         progress!(args.quiet, "Step 5: Estimating null distribution ({})...", args.null_method);
