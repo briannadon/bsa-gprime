@@ -1,4 +1,8 @@
+pub mod csv_reader;
 pub mod output;
+pub mod peaks;
+#[cfg(feature = "plotting")]
+pub mod plotting;
 pub mod significance;
 pub mod smoothing;
 pub mod statistics;

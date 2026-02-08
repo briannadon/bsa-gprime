@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bsa_gprime::{output, significance, smoothing, statistics, types::GStatisticResult, vcf_parser};
+use bsa_gprime::{csv_reader, output, peaks, significance, smoothing, statistics, types::GStatisticResult, vcf_parser};
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
@@ -11,8 +11,8 @@ use std::path::Path;
 #[command(about = "Calculate G-statistic for BSA-Seq data", long_about = None)]
 struct Args {
     /// Input VCF file (can be gzipped)
-    #[arg(short, long)]
-    input: String,
+    #[arg(short, long, required_unless_present = "plot_from")]
+    input: Option<String>,
 
     /// Output CSV file path
     #[arg(short, long)]
@@ -74,6 +74,34 @@ struct Args {
     /// Output BED file of significant regions (requires significance testing)
     #[arg(long)]
     bed: Option<String>,
+
+    /// Generate plots after analysis
+    #[arg(long)]
+    plot: bool,
+
+    /// Generate plots from an existing results CSV (skips VCF analysis)
+    #[arg(long, conflicts_with = "input")]
+    plot_from: Option<String>,
+
+    /// Output directory for plots (defaults to output file's directory)
+    #[arg(long)]
+    plot_dir: Option<String>,
+
+    /// Plot output format: "png" (default) or "svg"
+    #[arg(long, default_value = "png")]
+    plot_format: String,
+
+    /// Also generate delta SNP-index plot
+    #[arg(long)]
+    delta_snp_index: bool,
+
+    /// Maximum number of chromosomes to plot
+    #[arg(long, default_value = "12")]
+    max_plot_chroms: usize,
+
+    /// Write QTL peak summary to CSV file
+    #[arg(long)]
+    peaks_csv: Option<String>,
 }
 
 fn num_cpus() -> usize {
@@ -120,6 +148,15 @@ fn make_spinner(quiet: bool) -> ProgressBar {
     pb
 }
 
+#[cfg(feature = "plotting")]
+fn parse_plot_format(s: &str) -> Result<bsa_gprime::plotting::PlotFormat> {
+    match s.to_lowercase().as_str() {
+        "png" => Ok(bsa_gprime::plotting::PlotFormat::Png),
+        "svg" => Ok(bsa_gprime::plotting::PlotFormat::Svg),
+        other => anyhow::bail!("Invalid --plot-format '{}'. Must be 'png' or 'svg'", other),
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -129,9 +166,17 @@ fn main() -> Result<()> {
         .build_global()
         .unwrap();
 
+    // ─── Path B: Plot-from-CSV mode ───
+    if let Some(ref csv_path) = args.plot_from {
+        return run_plot_from_csv(&args, csv_path);
+    }
+
+    // ─── Path A: Normal analysis run ───
+    let input = args.input.as_ref().unwrap();
+
     // Validate input file exists
-    if !Path::new(&args.input).exists() {
-        anyhow::bail!("Input file not found: {}", args.input);
+    if !Path::new(input).exists() {
+        anyhow::bail!("Input file not found: {}", input);
     }
 
     // Validate --bed requires significance testing
@@ -155,7 +200,7 @@ fn main() -> Result<()> {
     let output_path = match (&args.output, &args.output_dir) {
         (Some(output), _) => output.clone(),
         (None, Some(dir)) => {
-            let input_path = Path::new(&args.input);
+            let input_path = Path::new(input);
             let stem = input_path
                 .file_stem()
                 .and_then(|s| {
@@ -176,13 +221,13 @@ fn main() -> Result<()> {
                 .to_string()
         }
         (None, None) => {
-            anyhow::bail!("Either --output or --output-dir must be specified");
+            anyhow::bail!("Either --output or --output-dir must be specified (unless using --plot-from)");
         }
     };
 
     progress!(args.quiet, "BSA G-Statistic Calculator");
     progress!(args.quiet, "=========================================");
-    progress!(args.quiet, "Input VCF: {}", args.input);
+    progress!(args.quiet, "Input VCF: {}", input);
     progress!(args.quiet, "Output CSV: {}", output_path);
     progress!(args.quiet, "Min depth: {}", args.min_depth);
     progress!(args.quiet, "Min GQ: {}", args.min_gq);
@@ -213,7 +258,7 @@ fn main() -> Result<()> {
     let pb_vcf = make_spinner(args.quiet);
     pb_vcf.set_message("variants parsed");
     let variants = vcf_parser::parse_vcf(
-        Path::new(&args.input),
+        Path::new(input),
         args.min_depth,
         args.min_gq,
         args.snps_only,
@@ -296,7 +341,7 @@ fn main() -> Result<()> {
                 let n_s = args.bulk_size.unwrap() * args.ploidy as f64;
                 let avg_coverage = significance::compute_avg_coverage(&results);
                 progress!(args.quiet, "  Average per-bulk coverage (C): {:.1}", avg_coverage);
-                
+
                 // Compute smoothing factors for equation 12 (Var[G'] estimation)
                 let factors = smoothing::compute_smoothing_factors(
                     &results, args.bandwidth, args.recombination_rate,
@@ -308,7 +353,7 @@ fn main() -> Result<()> {
                 } else {
                     progress!(args.quiet, "  Covariance term: omitted (no --recombination-rate provided)");
                 }
-                
+
                 significance::estimate_null_parametric_gprime(
                     n_s,
                     avg_coverage,
@@ -349,22 +394,202 @@ fn main() -> Result<()> {
                 .count();
             progress!(args.quiet, "  Wrote {} regions to {}", bed_regions, bed_path);
         }
+
+        // Peak detection
+        let detected_peaks = peaks::identify_peaks(&sig_results, args.bandwidth);
+        peaks::report_peaks(&detected_peaks);
+
+        if let Some(ref peaks_path) = args.peaks_csv {
+            peaks::write_peaks_csv(&detected_peaks, Path::new(peaks_path))?;
+            progress!(args.quiet, "  Peak summary written to: {}", peaks_path);
+        }
+
+        // Plotting (gated on feature)
+        #[cfg(feature = "plotting")]
+        if args.plot {
+            run_plots_sig(&args, &sig_results, &output_path)?;
+        }
     } else {
         // Original pipeline (no significance testing)
         progress!(args.quiet);
         progress!(args.quiet, "Step 4: Writing results to CSV...");
         output::write_results(&results, Path::new(&output_path))?;
+
+        // Peak detection by percentile
+        let detected_peaks = peaks::identify_peaks_by_percentile(&results, 99.0, args.bandwidth);
+        peaks::report_peaks(&detected_peaks);
+
+        if let Some(ref peaks_path) = args.peaks_csv {
+            peaks::write_peaks_csv(&detected_peaks, Path::new(peaks_path))?;
+            progress!(args.quiet, "  Peak summary written to: {}", peaks_path);
+        }
+
+        // Plotting (gated on feature)
+        #[cfg(feature = "plotting")]
+        if args.plot {
+            run_plots_basic(&args, &results, &output_path)?;
+        }
     }
 
     progress!(args.quiet);
     progress!(args.quiet, "Done! Results written to: {}", output_path);
+
+    Ok(())
+}
+
+/// Run plot-from-CSV mode: read existing CSV, detect peaks, generate plots.
+fn run_plot_from_csv(args: &Args, csv_path: &str) -> Result<()> {
+    progress!(args.quiet, "BSA G-Statistic Plotter (from CSV)");
+    progress!(args.quiet, "=========================================");
+    progress!(args.quiet, "Input CSV: {}", csv_path);
     progress!(args.quiet);
-    progress!(args.quiet, "Next steps:");
-    progress!(args.quiet, "  - Visualize results using R/Python");
-    progress!(args.quiet, "  - Look for QTL peaks (high G-statistic regions)");
-    if args.no_significance {
-        progress!(args.quiet, "  - Re-run without --no-significance for p-values and FDR correction");
+
+    let loaded = csv_reader::load_results_csv(Path::new(csv_path))?;
+
+    match loaded {
+        csv_reader::LoadedResults::WithSignificance(sig_results) => {
+            // Peak detection
+            let detected_peaks = peaks::identify_peaks(&sig_results, args.bandwidth);
+            peaks::report_peaks(&detected_peaks);
+
+            if let Some(ref peaks_path) = args.peaks_csv {
+                peaks::write_peaks_csv(&detected_peaks, Path::new(peaks_path))?;
+                progress!(args.quiet, "  Peak summary written to: {}", peaks_path);
+            }
+
+            #[cfg(feature = "plotting")]
+            run_plots_sig(args, &sig_results, csv_path)?;
+
+            #[cfg(not(feature = "plotting"))]
+            if args.plot || args.delta_snp_index {
+                eprintln!("Warning: plotting feature not enabled. Rebuild with default features to enable plots.");
+            }
+        }
+        csv_reader::LoadedResults::Basic(results) => {
+            // Peak detection by percentile
+            let detected_peaks = peaks::identify_peaks_by_percentile(&results, 99.0, args.bandwidth);
+            peaks::report_peaks(&detected_peaks);
+
+            if let Some(ref peaks_path) = args.peaks_csv {
+                peaks::write_peaks_csv(&detected_peaks, Path::new(peaks_path))?;
+                progress!(args.quiet, "  Peak summary written to: {}", peaks_path);
+            }
+
+            #[cfg(feature = "plotting")]
+            run_plots_basic(args, &results, csv_path)?;
+
+            #[cfg(not(feature = "plotting"))]
+            if args.plot || args.delta_snp_index {
+                eprintln!("Warning: plotting feature not enabled. Rebuild with default features to enable plots.");
+            }
+        }
+    }
+
+    progress!(args.quiet);
+    progress!(args.quiet, "Done!");
+
+    Ok(())
+}
+
+/// Generate plots for significance results.
+#[cfg(feature = "plotting")]
+fn run_plots_sig(
+    args: &Args,
+    sig_results: &[bsa_gprime::types::SignificanceResult],
+    reference_path: &str,
+) -> Result<()> {
+    use bsa_gprime::plotting;
+
+    let format = parse_plot_format(&args.plot_format)?;
+    let config = plotting::PlotConfig {
+        width: 1800,
+        row_height: 300,
+        format,
+        max_chromosomes: args.max_plot_chroms,
+    };
+
+    let (plot_dir, stem) = resolve_plot_paths(args, reference_path)?;
+    std::fs::create_dir_all(&plot_dir)?;
+
+    let ext = config.format.extension();
+
+    progress!(args.quiet, "Generating plots...");
+
+    // -log10(p-value) Manhattan plot
+    let pval_path = plot_dir.join(format!("{}_neglog10p.{}", stem, ext));
+    plotting::plot_neg_log10_pvalue(sig_results, &pval_path, &config)?;
+
+    // G-prime plot
+    let gprime_path = plot_dir.join(format!("{}_gprime.{}", stem, ext));
+    plotting::plot_gprime_sig(sig_results, &gprime_path, &config, 99.0)?;
+
+    // Delta SNP-index plot (optional)
+    if args.delta_snp_index {
+        let delta_path = plot_dir.join(format!("{}_delta_snp.{}", stem, ext));
+        plotting::plot_delta_snp_index_sig(sig_results, &delta_path, &config)?;
     }
 
     Ok(())
+}
+
+/// Generate plots for basic results (no significance).
+#[cfg(feature = "plotting")]
+fn run_plots_basic(
+    args: &Args,
+    results: &[GStatisticResult],
+    reference_path: &str,
+) -> Result<()> {
+    use bsa_gprime::plotting;
+
+    let format = parse_plot_format(&args.plot_format)?;
+    let config = plotting::PlotConfig {
+        width: 1800,
+        row_height: 300,
+        format,
+        max_chromosomes: args.max_plot_chroms,
+    };
+
+    let (plot_dir, stem) = resolve_plot_paths(args, reference_path)?;
+    std::fs::create_dir_all(&plot_dir)?;
+
+    let ext = config.format.extension();
+
+    progress!(args.quiet, "Generating plots...");
+
+    // G-stat plot
+    let gstat_path = plot_dir.join(format!("{}_gstat.{}", stem, ext));
+    plotting::plot_gstat(results, &gstat_path, &config, 99.0)?;
+
+    // Delta SNP-index plot (optional)
+    if args.delta_snp_index {
+        let delta_path = plot_dir.join(format!("{}_delta_snp.{}", stem, ext));
+        plotting::plot_delta_snp_index_basic(results, &delta_path, &config)?;
+    }
+
+    Ok(())
+}
+
+/// Resolve plot output directory and file stem from args and reference path.
+#[cfg(feature = "plotting")]
+fn resolve_plot_paths(
+    args: &Args,
+    reference_path: &str,
+) -> Result<(std::path::PathBuf, String)> {
+    let ref_path = Path::new(reference_path);
+
+    let plot_dir = if let Some(ref dir) = args.plot_dir {
+        std::path::PathBuf::from(dir)
+    } else {
+        ref_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    };
+
+    let stem = ref_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "bsa_plot".to_string());
+
+    Ok((plot_dir, stem))
 }

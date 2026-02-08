@@ -20,6 +20,10 @@ exclude = [
     "*.pdf",
 ]
 
+[features]
+default = ["plotting"]
+plotting = ["dep:plotters"]
+
 [dependencies]
 rust-htslib = "1.0"
 clap = { version = "4.5", features = ["derive"] }
@@ -28,6 +32,12 @@ anyhow = "1.0"
 statrs = "0.18"
 rayon = "1.10"
 indicatif = "0.17"
+
+[dependencies.plotters]
+version = "0.3"
+optional = true
+default-features = false
+features = ["bitmap_backend", "bitmap_encoder", "svg_backend", "line_series"]
 
 [dev-dependencies]
 approx = "0.5"
