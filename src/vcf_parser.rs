@@ -116,7 +116,7 @@ pub fn parse_vcf(
         };
 
         // Extract data for both samples
-        let resistant_data = match extract_sample_data(0) {
+        let high_data = match extract_sample_data(0) {
             Some(data) => data,
             None => {
                 filtered_count += 1;
@@ -124,7 +124,7 @@ pub fn parse_vcf(
             }
         };
 
-        let susceptible_data = match extract_sample_data(1) {
+        let low_data = match extract_sample_data(1) {
             Some(data) => data,
             None => {
                 filtered_count += 1;
@@ -132,16 +132,16 @@ pub fn parse_vcf(
             }
         };
 
-        let (resistant_ref, resistant_alt, resistant_dp, resistant_gq) = resistant_data;
-        let (susceptible_ref, susceptible_alt, susceptible_dp, susceptible_gq) =
-            susceptible_data;
+        let (high_ref, high_alt, high_dp, high_gq) = high_data;
+        let (low_ref, low_alt, low_dp, low_gq) =
+            low_data;
 
         // Apply filters
-        if resistant_dp < min_depth || susceptible_dp < min_depth {
+        if high_dp < min_depth || low_dp < min_depth {
             filtered_count += 1;
             continue;
         }
-        if resistant_gq < min_gq || susceptible_gq < min_gq {
+        if high_gq < min_gq || low_gq < min_gq {
             filtered_count += 1;
             continue;
         }
@@ -152,14 +152,14 @@ pub fn parse_vcf(
             pos: pos as u64,
             ref_allele,
             alt_allele,
-            resistant_ref_depth: resistant_ref,
-            resistant_alt_depth: resistant_alt,
-            resistant_dp,
-            resistant_gq,
-            susceptible_ref_depth: susceptible_ref,
-            susceptible_alt_depth: susceptible_alt,
-            susceptible_dp,
-            susceptible_gq,
+            high_ref_depth: high_ref,
+            high_alt_depth: high_alt,
+            high_dp: high_dp,
+            high_gq: high_gq,
+            low_ref_depth: low_ref,
+            low_alt_depth: low_alt,
+            low_dp: low_dp,
+            low_gq: low_gq,
         });
     }
 

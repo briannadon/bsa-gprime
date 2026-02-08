@@ -7,16 +7,16 @@ pub struct Variant {
     pub alt_allele: String,
 
     // Resistant bulk
-    pub resistant_ref_depth: u32,
-    pub resistant_alt_depth: u32,
-    pub resistant_dp: u32,
-    pub resistant_gq: u32,
+    pub high_ref_depth: u32,
+    pub high_alt_depth: u32,
+    pub high_dp: u32,
+    pub high_gq: u32,
 
     // Susceptible bulk
-    pub susceptible_ref_depth: u32,
-    pub susceptible_alt_depth: u32,
-    pub susceptible_dp: u32,
-    pub susceptible_gq: u32,
+    pub low_ref_depth: u32,
+    pub low_alt_depth: u32,
+    pub low_dp: u32,
+    pub low_gq: u32,
 }
 
 /// Results for a single variant
@@ -24,8 +24,8 @@ pub struct Variant {
 pub struct GStatisticResult {
     pub variant: Variant,
     pub g_statistic: f64,
-    pub snp_index_resistant: f64,
-    pub snp_index_susceptible: f64,
+    pub snp_index_high: f64,
+    pub snp_index_low: f64,
     pub delta_snp_index: f64,
 }
 

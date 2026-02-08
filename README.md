@@ -1,10 +1,10 @@
 # BSA G-Prime: Rust Implementation for Bulk Segregant Analysis
 
-A fast, efficient implementation of the G' (G-prime) statistic for Bulk Segregant Analysis using Next Generation Sequencing data.
+A fast, efficient implementation of the G' (G-prime) statistic for Bulk Segregant Analysis using Next Generation Sequencing data.  Currently implemented for diploid organisms.
 
 ## Overview
 
-This tool calculates the G-statistic for identifying QTL (Quantitative Trait Loci) from BSA-Seq data. It takes a VCF file with two bulk samples (resistant and susceptible) and computes G-statistics, smoothed G' values, p-values, and FDR-corrected q-values to identify genomic regions associated with the trait of interest.
+This tool calculates the G-statistic for identifying QTL (Quantitative Trait Loci) from BSA-Seq data. It takes a VCF file with two bulk samples (high and low) and computes G-statistics, smoothed G' values, p-values, and FDR-corrected q-values to identify genomic regions associated with the trait of interest.
 
 ## Features
 
@@ -17,17 +17,18 @@ This tool calculates the G-statistic for identifying QTL (Quantitative Trait Loc
 - SNP index and delta SNP index calculation
 - Quality filtering (depth, genotype quality)
 - Biallelic SNP filtering
-- Parallel processing with configurable thread count (rayon)
-- Progress bars with ETA for long-running steps
+- Parallel processing with configurable thread count 
 - CSV output for downstream analysis
 - BED output of significant QTL regions for genome browsers
+- QTL peak detection and summary CSV export
+- Built-in plotting: -log10(p-value), G'/G-stat, and delta SNP-index Manhattan plots (PNG or SVG)
+- Plot from existing results CSV without re-running the analysis (`--plot-from`)
 
 ## Installation
 
 ### Prerequisites
 
 - Rust 1.70+ (install from https://rustup.rs/)
-- For visualization: Python 3.9+ with conda/mamba or pip
 
 ### Build from source
 
@@ -39,6 +40,12 @@ cd bsa-gprime-rs
 cargo build --release
 
 # The binary will be at: ./target/release/bsa-gprime
+```
+
+Plotting is enabled by default. To build without plotting support:
+
+```bash
+cargo build --release --no-default-features
 ```
 
 ## Usage
@@ -107,19 +114,28 @@ Options:
       --null-method <NULL_METHOD>      Null distribution method [default: nonparametric]
       --bulk-size <BULK_SIZE>          Number of individuals per bulk (required for parametric)
       --ploidy <PLOIDY>                Ploidy of the organism [default: 2]
+      --recombination-rate <RATE>      Recombination rate in cM/Mb (parametric covariance term)
       --fdr-threshold <FDR_THRESHOLD>  FDR threshold for significance calls [default: 0.05]
       --threads <THREADS>              Number of threads for parallel processing [default: auto]
       --bed <BED>                      Output BED file of significant regions
+      --peaks-csv <PEAKS_CSV>          Write QTL peak summary to CSV file
+      --plot                           Generate plots after analysis
+      --plot-from <CSV>                Generate plots from existing results CSV (skips VCF analysis)
+      --plot-dir <PLOT_DIR>            Output directory for plots (defaults to output file's directory)
+      --plot-format <FORMAT>           Plot output format: "png" or "svg" [default: png]
+      --delta-snp-index                Also generate delta SNP-index plot
+      --max-plot-chroms <N>            Maximum number of chromosomes to plot [default: 12]
   -V, --version                        Print version
   -h, --help                           Print help
 ```
 
-Either `--output` or `--output-dir` must be provided. When using `--output-dir`, the output file is automatically named `{input_stem}_bsa_results.csv`.
+Either `--output` or `--output-dir` must be provided when running analysis. When using `--output-dir`, the output file is automatically named `{input_stem}_bsa_results.csv`.
 
 ### Expected Input Format
 
 Your VCF file should have:
-- Exactly 2 samples (resistant bulk and susceptible bulk)
+- Exactly 2 samples (high/low, resistant/susceptible, etc.)
+- The FIRST sample must be your "high" bulk, second is "low"
 - FORMAT fields: GT, AD, DP, GQ
 - Biallelic variants (single ALT allele)
 
@@ -136,18 +152,18 @@ When significance testing is enabled (default), the output CSV contains 20 colum
 - `pos`: Position (1-based)
 - `ref`: Reference allele
 - `alt`: Alternate allele
-- `resistant_ref_depth`: REF allele depth in resistant bulk
-- `resistant_alt_depth`: ALT allele depth in resistant bulk
-- `resistant_dp`: Total depth in resistant bulk
-- `resistant_gq`: Genotype quality in resistant bulk
-- `susceptible_ref_depth`: REF allele depth in susceptible bulk
-- `susceptible_alt_depth`: ALT allele depth in susceptible bulk
-- `susceptible_dp`: Total depth in susceptible bulk
-- `susceptible_gq`: Genotype quality in susceptible bulk
+- `high_ref_depth`: REF allele depth in high bulk
+- `high_alt_depth`: ALT allele depth in high bulk
+- `high_dp`: Total depth in high bulk
+- `high_gq`: Genotype quality in high bulk
+- `low_ref_depth`: REF allele depth in low bulk
+- `low_alt_depth`: ALT allele depth in low bulk
+- `low_dp`: Total depth in low bulk
+- `low_gq`: Genotype quality in low bulk
 - `g_statistic`: Raw G-statistic value
-- `snp_index_resistant`: SNP index for resistant bulk (ALT/(REF+ALT))
-- `snp_index_susceptible`: SNP index for susceptible bulk
-- `delta_snp_index`: Difference in SNP indices (susceptible - resistant)
+- `snp_index_high`: SNP index for high bulk (ALT/(REF+ALT))
+- `snp_index_low`: SNP index for low bulk
+- `delta_snp_index`: Difference in SNP indices (low - high)
 - `g_prime`: Smoothed G-statistic (tricube kernel)
 - `p_value`: P-value from log-normal null distribution
 - `q_value`: Benjamini-Hochberg adjusted p-value
@@ -168,6 +184,56 @@ When `--bed <PATH>` is provided (requires significance testing), a BED file of s
 
 Each line contains: `chrom  start  end  QTL_region_N  score  .` where coordinates are 0-based half-open (BED standard) and score is the maximum G' in the region (capped at 1000).
 
+## Visualization
+
+Built-in plotting generates faceted Manhattan plots directly from the Rust binary. No external dependencies are required.
+
+### Plotting with analysis
+
+Generate plots alongside the analysis:
+
+```bash
+./target/release/bsa-gprime \
+    --input data/bulks.vcf.gz \
+    --output results/bsa_results.csv \
+    --plot \
+    --delta-snp-index
+```
+
+This produces:
+- `*_neglog10p.png` — -log10(p-value) Manhattan plot
+- `*_gprime.png` — G' (smoothed G-statistic) Manhattan plot
+- `*_delta_snp.png` — Delta SNP-index plot (with `--delta-snp-index`)
+
+### Plotting from existing results
+
+Re-generate or customize plots from a previously computed results CSV without re-running the full analysis:
+
+```bash
+./target/release/bsa-gprime \
+    --plot-from results/bulks_bsa_results.csv \
+    --plot-dir results/plots/ \
+    --delta-snp-index \
+    --plot-format png
+```
+
+### Plot options
+
+| Flag | Description |
+|---|---|
+| `--plot` | Generate plots after analysis |
+| `--plot-from <CSV>` | Plot from existing results CSV (no VCF needed) |
+| `--plot-dir <DIR>` | Output directory for plots |
+| `--plot-format <FMT>` | `png` (default) or `svg` |
+| `--delta-snp-index` | Also generate delta SNP-index plot |
+| `--max-plot-chroms <N>` | Max chromosomes to plot [default: 12] |
+
+Data is automatically downsampled to the output resolution using min-max bucketing, so even datasets with millions of variants render in seconds.
+
+### Legacy Python visualization
+
+A Python script (`scripts/visualize_qtl.py`) is also included for alternative visualization. It requires Python 3.9+ with matplotlib and related dependencies (see `scripts/environment.yml` or `scripts/requirements.txt`). The built-in Rust plotting is recommended for most use cases.
+
 ## Significance Testing
 
 The significance testing pipeline follows Magwene et al. (2011):
@@ -178,8 +244,8 @@ The significance testing pipeline follows Magwene et al. (2011):
    - **Non-parametric** (default): Robust estimation from the observed G' distribution using the median and left-MAD, with Hampel's outlier rule to exclude QTL signals. This method is recommended for most use cases as it directly estimates the null distribution from the data.
    - **Parametric**: Requires `--bulk-size` (and optionally `--ploidy`). Computes expected mean and variance using equations 8-9 from Magwene et al. (2011):
      - **Equation 8**: E[G] = 1 + C/(2n_s)
-     - **Equation 9**: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s³)
-     - For smoothed G' values, variance is scaled by Σkⱼ² (sum of squared normalized kernel weights) per equation 12. The implementation computes Σkⱼ² automatically from the SNP density and smoothing window.
+     - **Equation 9**: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s^3)
+     - For smoothed G' values, variance is scaled by the sum of squared normalized kernel weights per equation 12. The implementation computes this automatically from the SNP density and smoothing window.
 
 3. **P-value computation**: Survival function (1 - CDF) of the fitted log-normal distribution evaluated at each G' value.
 
@@ -190,7 +256,7 @@ The significance testing pipeline follows Magwene et al. (2011):
 The implementation provides three methods for estimating the null distribution:
 
 1. **`estimate_null_parametric()`**: For raw G-statistics using equations 8-9
-2. **`estimate_null_parametric_gprime()`**: For smoothed G' values, accounts for variance reduction via Σkⱼ²
+2. **`estimate_null_parametric_gprime()`**: For smoothed G' values, accounts for variance reduction via the sum of squared kernel weights
 3. **`estimate_null_robust()`**: **Recommended** - Robust empirical estimator using Hampel's rule and mode estimation (step 3b of the paper's pipeline)
 
 #### Robust Empirical Estimator (Recommended)
@@ -198,12 +264,12 @@ The implementation provides three methods for estimating the null distribution:
 The robust estimator implements the full procedure from Magwene et al. (2011) step 3b:
 
 1. **Log-transform**: W_G' = ln(G'_observed)
-2. **Compute median & left-MAD**: MAD_l(W_G') = Median(|w_i - Median|) for w_i ≤ Median
-3. **Apply Hampel's rule**: Remove outliers where w_i > Median + 5.2 × MAD_l
+2. **Compute median & left-MAD**: MAD_l(W_G') = Median(|w_i - Median|) for w_i <= Median
+3. **Apply Hampel's rule**: Remove outliers where w_i > Median + 5.2 x MAD_l
 4. **Estimate mode**: Using kernel density estimation on trimmed data
 5. **Compute log-normal parameters**:
-   - μ = ln(Median of trimmed original values)
-   - σ² = μ - ln(Mode)
+   - mu = ln(Median of trimmed original values)
+   - sigma^2 = mu - ln(Mode)
 
 This approach:
 - Infers the null distribution from observed G' data **without requiring n_s or C**
@@ -211,98 +277,45 @@ This approach:
 - Is robust to model violations in the hierarchical sampling
 - Matches Figure S1 validation from the original paper
 
-#### Smoothing Factor (Σkⱼ²)
+#### Smoothing Factor
 
-The Σkⱼ² (sum of squared normalized kernel weights) is computed as:
-- kⱼ = wⱼ / Σwⱼ (normalized tricube weights)
-- Σkⱼ² = Σwⱼ² / (Σwⱼ)²
+The sum of squared normalized kernel weights is computed as:
+- k_j = w_j / sum(w_j) (normalized tricube weights)
+- sum(k_j^2) = sum(w_j^2) / (sum(w_j))^2
 
-For typical SNP densities (1 SNP per 1-10 kb), Σkⱼ² ranges from 0.1 to 0.5, meaning smoothing reduces variance by a factor of 2-10.
+For typical SNP densities (1 SNP per 1-10 kb), this ranges from 0.1 to 0.5, meaning smoothing reduces variance by a factor of 2-10.
 
-> **Note**: The parametric G' method uses Var[G'] ≈ Var[G] × Σkⱼ². The full equation 12 also includes a covariance term for linked SNPs, which is omitted for computational efficiency. This is a conservative approximation.
-
-## Visualization
-
-A Python script is provided in `scripts/` to visualize the results and identify QTL peaks.
-
-### Setup Python Environment
-
-**Using conda/mamba:**
-```bash
-mamba env create -f scripts/environment.yml
-mamba activate bsa-gprime-viz
-```
-
-**Using pip:**
-```bash
-pip install -r scripts/requirements.txt
-```
-
-### Visualize Results
-
-**Basic usage:**
-```bash
-python scripts/visualize_qtl.py bsa_results.csv
-```
-
-**With smoothing:**
-```bash
-python scripts/visualize_qtl.py bsa_results.csv \
-    --smooth \
-    --window 2000000 \
-    --output qtl_peaks.png
-```
-
-**With delta SNP index plot:**
-```bash
-python scripts/visualize_qtl.py bsa_results.csv \
-    --smooth \
-    --delta-snp-index \
-    --output qtl_analysis.png
-```
-
-### Visualization Options
-
-```
-Options:
-  input                        Input CSV file from bsa-gprime
-  -o, --output OUTPUT          Output plot file (PNG/PDF)
-  --smooth                     Apply smoothing to raw G-statistics
-  --window WINDOW              Smoothing window size in bp (default: 2,000,000)
-  --threshold THRESHOLD        Percentile threshold (default: 99)
-  --delta-snp-index            Also plot delta SNP index
-  --max-chroms MAX_CHROMS      Maximum chromosomes to plot (default: 12)
-```
-
-The visualization script will:
-1. Create faceted plots showing G-statistics across all chromosomes
-2. Highlight peaks above the significance threshold
-3. Identify and report QTL peak regions
-4. Save a summary CSV of detected peaks
+> **Note**: The parametric G' method uses Var[G'] ~ Var[G] x sum(k_j^2). The full equation 12 also includes a covariance term for linked SNPs, which is omitted for computational efficiency. This is a conservative approximation.
 
 ## Example Workflow
 
 ```bash
-# 1. Run analysis with significance testing (default)
+# 1. Run analysis with significance testing and plots
 ./target/release/bsa-gprime \
     --input data/bulks.vcf.gz \
     --output-dir results/ \
     --min-depth 10 \
     --min-gq 20 \
-    --snps-only
-
-# 2. Visualize results
-python scripts/visualize_qtl.py results/bulks_bsa_results.csv \
-    --smooth \
-    --window 2000000 \
-    --threshold 99 \
+    --snps-only \
+    --plot \
     --delta-snp-index \
-    --output qtl_analysis.png
+    --bed results/qtl_regions.bed \
+    --peaks-csv results/qtl_peaks.csv
 
-# 3. Check the outputs:
-#    - qtl_analysis_gstat.png: G-statistic Manhattan plot
-#    - qtl_analysis_delta.png: Delta SNP index plot
-#    - qtl_analysis_peaks.csv: Summary of detected QTL peaks
+# 2. Outputs:
+#    - results/bulks_bsa_results.csv     Full results table
+#    - results/qtl_regions.bed           BED file for genome browsers
+#    - results/qtl_peaks.csv             QTL peak summary
+#    - results/bulks_bsa_results_neglog10p.png  -log10(p) Manhattan plot
+#    - results/bulks_bsa_results_gprime.png     G' Manhattan plot
+#    - results/bulks_bsa_results_delta_snp.png  Delta SNP-index plot
+
+# 3. Re-generate plots with different settings
+./target/release/bsa-gprime \
+    --plot-from results/bulks_bsa_results.csv \
+    --plot-dir results/svg_plots/ \
+    --plot-format svg \
+    --delta-snp-index
 ```
 
 ## Performance
@@ -311,6 +324,7 @@ python scripts/visualize_qtl.py results/bulks_bsa_results.csv \
 - Parallel G-statistic calculation, smoothing, and p-value computation via rayon (`--threads`)
 - Handles gzipped VCF files natively (no decompression needed)
 - Memory-efficient streaming parser
+- Plotting uses min-max downsampling to handle millions of data points efficiently
 
 ## Interpreting Results
 

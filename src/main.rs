@@ -280,28 +280,28 @@ fn main() -> Result<()> {
             pb_gstat.inc(1);
 
             let g = statistics::calculate_g_statistic(
-                v.resistant_ref_depth,
-                v.resistant_alt_depth,
-                v.susceptible_ref_depth,
-                v.susceptible_alt_depth,
+                v.high_ref_depth,
+                v.high_alt_depth,
+                v.low_ref_depth,
+                v.low_alt_depth,
             );
 
-            let snp_index_resistant =
-                statistics::snp_index(v.resistant_ref_depth, v.resistant_alt_depth);
-            let snp_index_susceptible =
-                statistics::snp_index(v.susceptible_ref_depth, v.susceptible_alt_depth);
+            let snp_index_high =
+                statistics::snp_index(v.high_ref_depth, v.high_alt_depth);
+            let snp_index_low =
+                statistics::snp_index(v.low_ref_depth, v.low_alt_depth);
             let delta_snp_index = statistics::delta_snp_index(
-                v.resistant_ref_depth,
-                v.resistant_alt_depth,
-                v.susceptible_ref_depth,
-                v.susceptible_alt_depth,
+                v.high_ref_depth,
+                v.high_alt_depth,
+                v.low_ref_depth,
+                v.low_alt_depth,
             );
 
             GStatisticResult {
                 variant: v.clone(),
                 g_statistic: g,
-                snp_index_resistant,
-                snp_index_susceptible,
+                snp_index_high: snp_index_high,
+                snp_index_low: snp_index_low,
                 delta_snp_index,
             }
         })

@@ -54,20 +54,20 @@ pub fn snp_index(ref_depth: u32, alt_depth: u32) -> f64 {
 }
 
 /// Calculate delta SNP index
-/// Δ(SNP-index) = SNP_index_susceptible - SNP_index_resistant
+/// Δ(SNP-index) = SNP_index_low - SNP_index_high
 pub fn delta_snp_index(
-    resistant_ref: u32,
-    resistant_alt: u32,
-    susceptible_ref: u32,
-    susceptible_alt: u32,
+    high_ref: u32,
+    high_alt: u32,
+    low_ref: u32,
+    low_alt: u32,
 ) -> f64 {
-    let si_resistant = snp_index(resistant_ref, resistant_alt);
-    let si_susceptible = snp_index(susceptible_ref, susceptible_alt);
+    let si_high = snp_index(high_ref, high_alt);
+    let si_low = snp_index(low_ref, low_alt);
 
-    if si_resistant.is_nan() || si_susceptible.is_nan() {
+    if si_high.is_nan() || si_low.is_nan() {
         f64::NAN
     } else {
-        si_susceptible - si_resistant
+        si_low - si_high
     }
 }
 

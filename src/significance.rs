@@ -385,7 +385,7 @@ pub fn benjamini_hochberg(p_values: &[f64]) -> Vec<f64> {
 
 /// Compute average per-bulk coverage across all SNPs.
 ///
-/// Returns the mean of (resistant_dp + susceptible_dp) / 2 across all sites,
+/// Returns the mean of (high_dp + low_dp) / 2 across all sites,
 /// i.e. the average depth for a single bulk. This corresponds to C in
 /// equations 8-9 of Magwene et al. (2011), where each bulk is sequenced
 /// at average coverage C.
@@ -395,7 +395,7 @@ pub fn compute_avg_coverage(results: &[GStatisticResult]) -> f64 {
     }
     let total: f64 = results
         .iter()
-        .map(|r| (r.variant.resistant_dp + r.variant.susceptible_dp) as f64 / 2.0)
+        .map(|r| (r.variant.high_dp + r.variant.low_dp) as f64 / 2.0)
         .sum();
     total / results.len() as f64
 }

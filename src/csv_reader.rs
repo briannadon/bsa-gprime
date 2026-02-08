@@ -53,21 +53,21 @@ fn parse_basic_record(record: &csv::StringRecord, row: usize) -> Result<GStatist
         pos: record.get(1).with_context(ctx)?.parse().with_context(ctx)?,
         ref_allele: record.get(2).with_context(ctx)?.to_string(),
         alt_allele: record.get(3).with_context(ctx)?.to_string(),
-        resistant_ref_depth: record.get(4).with_context(ctx)?.parse().with_context(ctx)?,
-        resistant_alt_depth: record.get(5).with_context(ctx)?.parse().with_context(ctx)?,
-        resistant_dp: record.get(6).with_context(ctx)?.parse().with_context(ctx)?,
-        resistant_gq: record.get(7).with_context(ctx)?.parse().with_context(ctx)?,
-        susceptible_ref_depth: record.get(8).with_context(ctx)?.parse().with_context(ctx)?,
-        susceptible_alt_depth: record.get(9).with_context(ctx)?.parse().with_context(ctx)?,
-        susceptible_dp: record.get(10).with_context(ctx)?.parse().with_context(ctx)?,
-        susceptible_gq: record.get(11).with_context(ctx)?.parse().with_context(ctx)?,
+        high_ref_depth: record.get(4).with_context(ctx)?.parse().with_context(ctx)?,
+        high_alt_depth: record.get(5).with_context(ctx)?.parse().with_context(ctx)?,
+        high_dp: record.get(6).with_context(ctx)?.parse().with_context(ctx)?,
+        high_gq: record.get(7).with_context(ctx)?.parse().with_context(ctx)?,
+        low_ref_depth: record.get(8).with_context(ctx)?.parse().with_context(ctx)?,
+        low_alt_depth: record.get(9).with_context(ctx)?.parse().with_context(ctx)?,
+        low_dp: record.get(10).with_context(ctx)?.parse().with_context(ctx)?,
+        low_gq: record.get(11).with_context(ctx)?.parse().with_context(ctx)?,
     };
 
     Ok(GStatisticResult {
         variant,
         g_statistic: record.get(12).with_context(ctx)?.parse().with_context(ctx)?,
-        snp_index_resistant: record.get(13).with_context(ctx)?.parse().with_context(ctx)?,
-        snp_index_susceptible: record.get(14).with_context(ctx)?.parse().with_context(ctx)?,
+        snp_index_high: record.get(13).with_context(ctx)?.parse().with_context(ctx)?,
+        snp_index_low: record.get(14).with_context(ctx)?.parse().with_context(ctx)?,
         delta_snp_index: record.get(15).with_context(ctx)?.parse().with_context(ctx)?,
     })
 }
