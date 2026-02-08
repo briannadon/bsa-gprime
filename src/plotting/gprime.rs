@@ -1,6 +1,7 @@
 use anyhow::Result;
 use plotters::prelude::*;
 
+use super::downsample;
 use super::faceted::ChromPanel;
 use super::{COLOR_GRID, COLOR_MAGENTA, COLOR_RED, COLOR_STEEL_BLUE, N_COLS};
 use crate::types::{GStatisticResult, SignificanceResult};
@@ -43,6 +44,8 @@ where
     } else {
         10.0
     };
+
+    let pixel_width = downsample::panel_pixel_width(root.dim_in_pixel().0, N_COLS);
 
     for (idx, panel) in panels.iter().enumerate() {
         if idx >= panel_areas.len() {
@@ -88,12 +91,15 @@ where
             .map(|(j, &i)| (positions_mb[j], results[i].g_prime))
             .collect();
 
+        let line_ds = downsample::minmax_downsample(&line_data, pixel_width);
+        let line_draw = line_ds.as_deref().unwrap_or(&line_data);
+
         chart.draw_series(LineSeries::new(
-            line_data.iter().copied(),
+            line_draw.iter().copied(),
             COLOR_STEEL_BLUE.mix(0.7).stroke_width(1),
         ))?;
 
-        // Scatter points above threshold
+        // Scatter points above threshold (from original data, not downsampled)
         let sig_points: Vec<(f64, f64)> = line_data
             .iter()
             .filter(|(_, y)| *y > threshold)
@@ -159,6 +165,8 @@ where
         10.0
     };
 
+    let pixel_width = downsample::panel_pixel_width(root.dim_in_pixel().0, N_COLS);
+
     for (idx, panel) in panels.iter().enumerate() {
         if idx >= panel_areas.len() {
             break;
@@ -207,12 +215,15 @@ where
             .map(|(j, &i)| (positions_mb[j], results[i].g_statistic))
             .collect();
 
+        let line_ds = downsample::minmax_downsample(&line_data, pixel_width);
+        let line_draw = line_ds.as_deref().unwrap_or(&line_data);
+
         chart.draw_series(LineSeries::new(
-            line_data.iter().copied(),
+            line_draw.iter().copied(),
             COLOR_STEEL_BLUE.mix(0.7).stroke_width(1),
         ))?;
 
-        // Points above threshold
+        // Points above threshold (from original data, not downsampled)
         let sig_points: Vec<(f64, f64)> = line_data
             .iter()
             .filter(|(_, y)| *y > threshold)

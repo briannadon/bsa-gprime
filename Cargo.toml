@@ -37,7 +37,7 @@ indicatif = "0.17"
 version = "0.3"
 optional = true
 default-features = false
-features = ["bitmap_backend", "bitmap_encoder", "svg_backend", "line_series"]
+features = ["bitmap_backend", "bitmap_encoder", "svg_backend", "line_series", "ab_glyph"]
 
 [dev-dependencies]
 approx = "0.5"

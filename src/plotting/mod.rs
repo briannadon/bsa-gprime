@@ -1,4 +1,5 @@
 mod delta_snp_index;
+mod downsample;
 mod faceted;
 mod gprime;
 mod manhattan;
@@ -6,8 +7,26 @@ mod manhattan;
 use anyhow::Result;
 use plotters::prelude::*;
 use std::path::Path;
+use std::sync::Once;
 
 use crate::types::{GStatisticResult, SignificanceResult};
+
+static FONT_INIT: Once = Once::new();
+
+/// Register an embedded font for the ab_glyph backend (no-op after first call).
+fn ensure_fonts() {
+    FONT_INIT.call_once(|| {
+        // DejaVu Sans is available on virtually all Linux systems
+        let font_data: &'static [u8] =
+            include_bytes!("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+        plotters::style::register_font("sans-serif", FontStyle::Normal, font_data)
+            .unwrap_or_else(|_| panic!("failed to register sans-serif Normal font"));
+        plotters::style::register_font("sans-serif", FontStyle::Bold, font_data)
+            .unwrap_or_else(|_| panic!("failed to register sans-serif Bold font"));
+        plotters::style::register_font("sans-serif", FontStyle::Italic, font_data)
+            .unwrap_or_else(|_| panic!("failed to register sans-serif Italic font"));
+    });
+}
 
 /// Output format for plots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +80,7 @@ pub fn plot_neg_log10_pvalue(
     path: &Path,
     config: &PlotConfig,
 ) -> Result<()> {
+    ensure_fonts();
     let panels = faceted::prepare_chrom_panels_sig(results, config.max_chromosomes);
     if panels.is_empty() {
         anyhow::bail!("No data to plot");
@@ -93,6 +113,7 @@ pub fn plot_gprime_sig(
     config: &PlotConfig,
     threshold_percentile: f64,
 ) -> Result<()> {
+    ensure_fonts();
     let panels = faceted::prepare_chrom_panels_sig(results, config.max_chromosomes);
     if panels.is_empty() {
         anyhow::bail!("No data to plot");
@@ -125,6 +146,7 @@ pub fn plot_gstat(
     config: &PlotConfig,
     threshold_percentile: f64,
 ) -> Result<()> {
+    ensure_fonts();
     let panels = faceted::prepare_chrom_panels_basic(results, config.max_chromosomes);
     if panels.is_empty() {
         anyhow::bail!("No data to plot");
@@ -156,6 +178,7 @@ pub fn plot_delta_snp_index_sig(
     path: &Path,
     config: &PlotConfig,
 ) -> Result<()> {
+    ensure_fonts();
     let panels = faceted::prepare_chrom_panels_sig(results, config.max_chromosomes);
     if panels.is_empty() {
         anyhow::bail!("No data to plot");
@@ -187,6 +210,7 @@ pub fn plot_delta_snp_index_basic(
     path: &Path,
     config: &PlotConfig,
 ) -> Result<()> {
+    ensure_fonts();
     let panels = faceted::prepare_chrom_panels_basic(results, config.max_chromosomes);
     if panels.is_empty() {
         anyhow::bail!("No data to plot");

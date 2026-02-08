@@ -1,6 +1,7 @@
 use anyhow::Result;
 use plotters::prelude::*;
 
+use super::downsample;
 use super::faceted::ChromPanel;
 use super::{COLOR_GRID, COLOR_MAGENTA, COLOR_RED, COLOR_STEEL_BLUE, N_COLS};
 use crate::types::SignificanceResult;
@@ -59,6 +60,8 @@ where
         }
     };
 
+    let pixel_width = downsample::panel_pixel_width(root.dim_in_pixel().0, N_COLS);
+
     for (idx, panel) in panels.iter().enumerate() {
         if idx >= panel_areas.len() {
             break;
@@ -107,7 +110,10 @@ where
             .map(|(j, &i)| (positions_mb[j], neg_log_p[i]))
             .collect();
 
-        chart.draw_series(bg_points.iter().map(|&(x, y)| {
+        let bg_ds = downsample::minmax_downsample(&bg_points, pixel_width);
+        let bg_draw = bg_ds.as_deref().unwrap_or(&bg_points);
+
+        chart.draw_series(bg_draw.iter().map(|&(x, y)| {
             Circle::new((x, y), 1, COLOR_STEEL_BLUE.mix(0.4).filled())
         }))?;
 

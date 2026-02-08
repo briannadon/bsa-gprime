@@ -1,6 +1,7 @@
 use anyhow::Result;
 use plotters::prelude::*;
 
+use super::downsample;
 use super::faceted::ChromPanel;
 use super::{COLOR_BLACK, COLOR_GRID, COLOR_ORANGE, N_COLS};
 use crate::types::{GStatisticResult, SignificanceResult};
@@ -24,6 +25,8 @@ where
 
     let n_rows = (panels.len() + N_COLS - 1) / N_COLS;
     let panel_areas = chart_area.split_evenly((n_rows, N_COLS));
+
+    let pixel_width = downsample::panel_pixel_width(root.dim_in_pixel().0, N_COLS);
 
     for (idx, panel) in panels.iter().enumerate() {
         if idx >= panel_areas.len() {
@@ -73,8 +76,11 @@ where
             .map(|(j, &i)| (positions_mb[j], results[i].raw.delta_snp_index))
             .collect();
 
+        let line_ds = downsample::minmax_downsample(&line_data, pixel_width);
+        let line_draw = line_ds.as_deref().unwrap_or(&line_data);
+
         chart.draw_series(LineSeries::new(
-            line_data.iter().copied(),
+            line_draw.iter().copied(),
             COLOR_ORANGE.mix(0.7).stroke_width(1),
         ))?;
 
@@ -107,6 +113,8 @@ where
 
     let n_rows = (panels.len() + N_COLS - 1) / N_COLS;
     let panel_areas = chart_area.split_evenly((n_rows, N_COLS));
+
+    let pixel_width = downsample::panel_pixel_width(root.dim_in_pixel().0, N_COLS);
 
     for (idx, panel) in panels.iter().enumerate() {
         if idx >= panel_areas.len() {
@@ -156,8 +164,11 @@ where
             .map(|(j, &i)| (positions_mb[j], results[i].delta_snp_index))
             .collect();
 
+        let line_ds = downsample::minmax_downsample(&line_data, pixel_width);
+        let line_draw = line_ds.as_deref().unwrap_or(&line_data);
+
         chart.draw_series(LineSeries::new(
-            line_data.iter().copied(),
+            line_draw.iter().copied(),
             COLOR_ORANGE.mix(0.7).stroke_width(1),
         ))?;
 
