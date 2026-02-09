@@ -4,11 +4,21 @@ use csv::Writer;
 use std::io::Write;
 use std::path::Path;
 
+/// Check whether any result has parental info attached.
+fn has_parental_info_basic(results: &[GStatisticResult]) -> bool {
+    results.first().map_or(false, |r| r.variant.parental_info.is_some())
+}
+
+fn has_parental_info_sig(results: &[SignificanceResult]) -> bool {
+    results.first().map_or(false, |r| r.raw.variant.parental_info.is_some())
+}
+
 pub fn write_results(results: &[GStatisticResult], path: &Path) -> Result<()> {
     let mut wtr = Writer::from_path(path)?;
+    let parental = has_parental_info_basic(results);
 
     // Write header
-    wtr.write_record(&[
+    let mut headers = vec![
         "chrom",
         "pos",
         "ref",
@@ -25,28 +35,40 @@ pub fn write_results(results: &[GStatisticResult], path: &Path) -> Result<()> {
         "snp_index_high",
         "snp_index_low",
         "delta_snp_index",
-    ])?;
+    ];
+    if parental {
+        headers.extend_from_slice(&["parent_high_gt", "parent_low_gt", "alleles_swapped"]);
+    }
+    wtr.write_record(&headers)?;
 
     // Write data
     for result in results {
-        wtr.write_record(&[
-            &result.variant.chrom,
-            &result.variant.pos.to_string(),
-            &result.variant.ref_allele,
-            &result.variant.alt_allele,
-            &result.variant.high_ref_depth.to_string(),
-            &result.variant.high_alt_depth.to_string(),
-            &result.variant.high_dp.to_string(),
-            &result.variant.high_gq.to_string(),
-            &result.variant.low_ref_depth.to_string(),
-            &result.variant.low_alt_depth.to_string(),
-            &result.variant.low_dp.to_string(),
-            &result.variant.low_gq.to_string(),
-            &format!("{:.6}", result.g_statistic),
-            &format!("{:.6}", result.snp_index_high),
-            &format!("{:.6}", result.snp_index_low),
-            &format!("{:.6}", result.delta_snp_index),
-        ])?;
+        let mut row = vec![
+            result.variant.chrom.clone(),
+            result.variant.pos.to_string(),
+            result.variant.ref_allele.clone(),
+            result.variant.alt_allele.clone(),
+            result.variant.high_ref_depth.to_string(),
+            result.variant.high_alt_depth.to_string(),
+            result.variant.high_dp.to_string(),
+            result.variant.high_gq.to_string(),
+            result.variant.low_ref_depth.to_string(),
+            result.variant.low_alt_depth.to_string(),
+            result.variant.low_dp.to_string(),
+            result.variant.low_gq.to_string(),
+            format!("{:.6}", result.g_statistic),
+            format!("{:.6}", result.snp_index_high),
+            format!("{:.6}", result.snp_index_low),
+            format!("{:.6}", result.delta_snp_index),
+        ];
+        if parental {
+            if let Some(ref pi) = result.variant.parental_info {
+                row.push(pi.parent_high_gt.clone());
+                row.push(pi.parent_low_gt.clone());
+                row.push(pi.alleles_swapped.to_string());
+            }
+        }
+        wtr.write_record(&row)?;
     }
 
     wtr.flush()?;
@@ -55,8 +77,9 @@ pub fn write_results(results: &[GStatisticResult], path: &Path) -> Result<()> {
 
 pub fn write_significance_results(results: &[SignificanceResult], path: &Path) -> Result<()> {
     let mut wtr = Writer::from_path(path)?;
+    let parental = has_parental_info_sig(results);
 
-    wtr.write_record(&[
+    let mut headers = vec![
         "chrom",
         "pos",
         "ref",
@@ -77,31 +100,43 @@ pub fn write_significance_results(results: &[SignificanceResult], path: &Path) -
         "p_value",
         "q_value",
         "significant",
-    ])?;
+    ];
+    if parental {
+        headers.extend_from_slice(&["parent_high_gt", "parent_low_gt", "alleles_swapped"]);
+    }
+    wtr.write_record(&headers)?;
 
     for result in results {
-        wtr.write_record(&[
-            &result.raw.variant.chrom,
-            &result.raw.variant.pos.to_string(),
-            &result.raw.variant.ref_allele,
-            &result.raw.variant.alt_allele,
-            &result.raw.variant.high_ref_depth.to_string(),
-            &result.raw.variant.high_alt_depth.to_string(),
-            &result.raw.variant.high_dp.to_string(),
-            &result.raw.variant.high_gq.to_string(),
-            &result.raw.variant.low_ref_depth.to_string(),
-            &result.raw.variant.low_alt_depth.to_string(),
-            &result.raw.variant.low_dp.to_string(),
-            &result.raw.variant.low_gq.to_string(),
-            &format!("{:.6}", result.raw.g_statistic),
-            &format!("{:.6}", result.raw.snp_index_high),
-            &format!("{:.6}", result.raw.snp_index_low),
-            &format!("{:.6}", result.raw.delta_snp_index),
-            &format!("{:.6}", result.g_prime),
-            &format!("{:.6e}", result.p_value),
-            &format!("{:.6e}", result.q_value),
-            &result.significant.to_string(),
-        ])?;
+        let mut row = vec![
+            result.raw.variant.chrom.clone(),
+            result.raw.variant.pos.to_string(),
+            result.raw.variant.ref_allele.clone(),
+            result.raw.variant.alt_allele.clone(),
+            result.raw.variant.high_ref_depth.to_string(),
+            result.raw.variant.high_alt_depth.to_string(),
+            result.raw.variant.high_dp.to_string(),
+            result.raw.variant.high_gq.to_string(),
+            result.raw.variant.low_ref_depth.to_string(),
+            result.raw.variant.low_alt_depth.to_string(),
+            result.raw.variant.low_dp.to_string(),
+            result.raw.variant.low_gq.to_string(),
+            format!("{:.6}", result.raw.g_statistic),
+            format!("{:.6}", result.raw.snp_index_high),
+            format!("{:.6}", result.raw.snp_index_low),
+            format!("{:.6}", result.raw.delta_snp_index),
+            format!("{:.6}", result.g_prime),
+            format!("{:.6e}", result.p_value),
+            format!("{:.6e}", result.q_value),
+            result.significant.to_string(),
+        ];
+        if parental {
+            if let Some(ref pi) = result.raw.variant.parental_info {
+                row.push(pi.parent_high_gt.clone());
+                row.push(pi.parent_low_gt.clone());
+                row.push(pi.alleles_swapped.to_string());
+            }
+        }
+        wtr.write_record(&row)?;
     }
 
     wtr.flush()?;

@@ -250,6 +250,7 @@ mod tests {
                 low_alt_depth: 50,
                 low_dp: 100,
                 low_gq: 99,
+                parental_info: None,
             },
             g_statistic: g,
             snp_index_high: 0.5,

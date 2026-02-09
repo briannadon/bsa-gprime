@@ -1,3 +1,11 @@
+/// Parental genotype information for a variant site
+#[derive(Debug, Clone)]
+pub struct ParentalInfo {
+    pub parent_high_gt: String,  // e.g., "0/0" or "1/1"
+    pub parent_low_gt: String,
+    pub alleles_swapped: bool,   // Whether REF/ALT depths were swapped
+}
+
 /// Represents a single variant with allele counts
 #[derive(Debug, Clone)]
 pub struct Variant {
@@ -17,6 +25,9 @@ pub struct Variant {
     pub low_alt_depth: u32,
     pub low_dp: u32,
     pub low_gq: u32,
+
+    // Parental info (None when running without parental samples)
+    pub parental_info: Option<ParentalInfo>,
 }
 
 /// Results for a single variant

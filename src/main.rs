@@ -4,6 +4,7 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::path::Path;
+use vcf_parser::{ParentalConfig, SampleConfig};
 
 #[derive(Parser)]
 #[command(name = "bsa-gprime")]
@@ -29,6 +30,30 @@ struct Args {
     /// Minimum genotype quality
     #[arg(long, default_value = "20")]
     min_gq: u32,
+
+    /// Sample name for high/resistant bulk
+    #[arg(long)]
+    high_bulk: Option<String>,
+
+    /// Sample name for low/susceptible bulk
+    #[arg(long)]
+    low_bulk: Option<String>,
+
+    /// Parent of the high/resistant bulk (requires --parent-low)
+    #[arg(long, requires = "parent_low")]
+    parent_high: Option<String>,
+
+    /// Parent of the low/susceptible bulk (requires --parent-high)
+    #[arg(long, requires = "parent_high")]
+    parent_low: Option<String>,
+
+    /// Minimum depth for parental samples (defaults to --min-depth)
+    #[arg(long)]
+    min_parent_depth: Option<u32>,
+
+    /// Minimum GQ for parental samples (defaults to --min-gq)
+    #[arg(long)]
+    min_parent_gq: Option<u32>,
 
     /// SNPs only (exclude INDELs)
     #[arg(long)]
@@ -80,7 +105,7 @@ struct Args {
     plot: bool,
 
     /// Generate plots from an existing results CSV (skips VCF analysis)
-    #[arg(long, conflicts_with = "input")]
+    #[arg(long, conflicts_with_all = ["input", "parent_high", "parent_low"])]
     plot_from: Option<String>,
 
     /// Output directory for plots (defaults to output file's directory)
@@ -196,6 +221,50 @@ fn main() -> Result<()> {
         );
     }
 
+    // Validate parental sample names are all distinct
+    if args.parent_high.is_some() {
+        let names: Vec<&str> = [
+            args.high_bulk.as_deref(),
+            args.low_bulk.as_deref(),
+            args.parent_high.as_deref(),
+            args.parent_low.as_deref(),
+        ]
+        .iter()
+        .filter_map(|n| *n)
+        .collect();
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        if unique.len() != names.len() {
+            anyhow::bail!("All sample names (--high-bulk, --low-bulk, --parent-high, --parent-low) must be distinct");
+        }
+    }
+
+    // Build sample config
+    let sample_config = if args.high_bulk.is_some()
+        || args.low_bulk.is_some()
+        || args.parent_high.is_some()
+    {
+        let parental = if let (Some(ph), Some(pl)) =
+            (args.parent_high.as_ref(), args.parent_low.as_ref())
+        {
+            Some(ParentalConfig {
+                parent_high_name: ph.clone(),
+                parent_low_name: pl.clone(),
+                min_depth: args.min_parent_depth.unwrap_or(args.min_depth),
+                min_gq: args.min_parent_gq.unwrap_or(args.min_gq),
+            })
+        } else {
+            None
+        };
+
+        Some(SampleConfig {
+            high_bulk_name: args.high_bulk.clone(),
+            low_bulk_name: args.low_bulk.clone(),
+            parental,
+        })
+    } else {
+        None
+    };
+
     // Resolve output path
     let output_path = match (&args.output, &args.output_dir) {
         (Some(output), _) => output.clone(),
@@ -248,6 +317,21 @@ fn main() -> Result<()> {
         }
         progress!(args.quiet, "  FDR threshold: {}", args.fdr_threshold);
     }
+    if args.parent_high.is_some() {
+        progress!(args.quiet, "Parental mode: enabled");
+        progress!(args.quiet, "  Parent-high: {}", args.parent_high.as_ref().unwrap());
+        progress!(args.quiet, "  Parent-low: {}", args.parent_low.as_ref().unwrap());
+        progress!(
+            args.quiet,
+            "  Min parent depth: {}",
+            args.min_parent_depth.unwrap_or(args.min_depth)
+        );
+        progress!(
+            args.quiet,
+            "  Min parent GQ: {}",
+            args.min_parent_gq.unwrap_or(args.min_gq)
+        );
+    }
     if let Some(ref bed_path) = args.bed {
         progress!(args.quiet, "BED output: {}", bed_path);
     }
@@ -263,6 +347,7 @@ fn main() -> Result<()> {
         args.min_gq,
         args.snps_only,
         args.quiet,
+        sample_config.as_ref(),
     )?;
     pb_vcf.finish_and_clear();
 

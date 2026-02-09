@@ -323,6 +323,7 @@ mod tests {
                     low_alt_depth: 5,
                     low_dp: 30,
                     low_gq: 99,
+                    parental_info: None,
                 },
                 g_statistic: 5.0,
                 snp_index_high: 0.33,
