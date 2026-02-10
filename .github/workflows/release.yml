@@ -35,10 +35,6 @@ jobs:
             runner: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
-          - name: Windows x86_64
-            runner: windows-latest
-            target: x86_64-pc-windows-gnu
-            archive: zip
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -59,33 +55,6 @@ jobs:
         if: matrix.cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Setup MSYS2 (Windows)
-        if: runner.os == 'Windows'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-autotools
-            mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-bzip2
-            mingw-w64-x86_64-xz
-            mingw-w64-x86_64-curl
-            mingw-w64-x86_64-openssl
-            mingw-w64-x86_64-pkg-config
-
-      - name: Configure Windows environment
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "C:/msys64/mingw64/bin" >> "$GITHUB_PATH"
-          echo "PKG_CONFIG_PATH=C:/msys64/mingw64/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "OPENSSL_DIR=C:/msys64/mingw64" >> "$GITHUB_ENV"
-          echo "OPENSSL_INCLUDE_DIR=C:/msys64/mingw64/include" >> "$GITHUB_ENV"
-          echo "OPENSSL_LIB_DIR=C:/msys64/mingw64/lib" >> "$GITHUB_ENV"
-
       - name: Build (cross)
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
@@ -94,20 +63,11 @@ jobs:
         if: ${{ !matrix.cross }}
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (tar.gz)
-        if: matrix.archive == 'tar.gz'
+      - name: Package
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../bsa-gprime-${{ matrix.target }}.tar.gz bsa-gprime
-          cd -
-
-      - name: Package (zip)
-        if: matrix.archive == 'zip'
-        shell: bash
-        run: |
-          cd target/${{ matrix.target }}/release
-          7z a ../../../bsa-gprime-${{ matrix.target }}.zip bsa-gprime.exe
           cd -
 
       - name: Upload artifact
