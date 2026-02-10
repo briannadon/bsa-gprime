@@ -18,7 +18,7 @@ This tool calculates the G-statistic for identifying QTL (Quantitative Trait Loc
 
 ### Pre-built binaries
 
-Go to the [releases](https://github.com/briannadon/bsa-gprime/releases) page and download the binary that matches your computing system (Windows, Linux, MacOS supported - Windows ARM **not** supported).
+Go to the [releases](https://github.com/briannadon/bsa-gprime/releases) page and download the binary that matches your computing system (Linux, MacOS supported - Windows **not** supported).
 
 If you want to use it from anywhere on the command line, place the binary in your $PATH. 
 
