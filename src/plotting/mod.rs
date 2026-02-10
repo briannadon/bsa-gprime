@@ -16,9 +16,8 @@ static FONT_INIT: Once = Once::new();
 /// Register an embedded font for the ab_glyph backend (no-op after first call).
 fn ensure_fonts() {
     FONT_INIT.call_once(|| {
-        // DejaVu Sans is available on virtually all Linux systems
         let font_data: &'static [u8] =
-            include_bytes!("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/DejaVuSans.ttf"));
         plotters::style::register_font("sans-serif", FontStyle::Normal, font_data)
             .unwrap_or_else(|_| panic!("failed to register sans-serif Normal font"));
         plotters::style::register_font("sans-serif", FontStyle::Bold, font_data)

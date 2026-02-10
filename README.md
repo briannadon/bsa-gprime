@@ -50,12 +50,33 @@ cargo build --release --no-default-features
 
 ### Basic Usage
 
-By default the tool runs the full significance testing pipeline (smoothing, p-values, FDR correction):
+By default the tool runs the full significance testing pipeline (smoothing, p-values, FDR correction).
+
+#### Bulks only
+
+If your VCF contains only the two bulk samples, you can run the analysis directly. The first sample in the VCF is assumed to be the high bulk and the second the low bulk (or specify them explicitly with `--high-bulk` and `--low-bulk`):
 
 ```bash
-./target/release/bsa-gprime \
+bsa-gprime \
     --input data/bulks.vcf.gz \
     --output results/bsa_results.csv \
+    --min-depth 10 \
+    --min-gq 20 \
+    --snps-only
+```
+
+#### Bulks + parental lines
+
+If your VCF also contains the parental lines, provide their sample names with `--parent-high` and `--parent-low`. Parental genotypes are used to refine allele depth estimates in each bulk. You can optionally set separate depth/quality filters for the parents with `--min-parent-depth` and `--min-parent-gq` (they default to the bulk filter values):
+
+```bash
+bsa-gprime \
+    --input data/cross.vcf.gz \
+    --output results/bsa_results.csv \
+    --high-bulk high_bulk \
+    --low-bulk low_bulk \
+    --parent-high parent_a \
+    --parent-low parent_b \
     --min-depth 10 \
     --min-gq 20 \
     --snps-only
@@ -66,7 +87,7 @@ By default the tool runs the full significance testing pipeline (smoothing, p-va
 If you know the number of individuals per bulk, you can use the parametric method for the null distribution calculations (Magwene et al. 2011). Specify the number of individuals with `--bulk-size` and the organism ploidy with `--ploidy` (default: 2). The effective population parameter n_s is computed as `bulk_size * ploidy`.
 
 ```bash
-./target/release/bsa-gprime \
+bsa-gprime \
     --input data/bulks.vcf.gz \
     --output results/bsa_results.csv \
     --null-method parametric \
@@ -79,7 +100,7 @@ If you know the number of individuals per bulk, you can use the parametric metho
 To skip smoothing and significance testing entirely:
 
 ```bash
-./target/release/bsa-gprime \
+bsa-gprime \
     --input data/bulks.vcf.gz \
     --output results/bsa_results.csv \
     --no-significance
@@ -88,7 +109,7 @@ To skip smoothing and significance testing entirely:
 ### Using --output-dir (auto-names the output file)
 
 ```bash
-./target/release/bsa-gprime \
+bsa-gprime \
     --input data/bulks.vcf.gz \
     --output-dir results/ \
     --snps-only
@@ -283,36 +304,6 @@ The sum of squared normalized kernel weights is computed as:
 
 For typical SNP densities (1 SNP per 1-10 kb), this ranges from 0.1 to 0.5, meaning smoothing reduces variance by a factor of 2-10.
 
-## Example Workflow
-
-```bash
-# 1. Run analysis with significance testing and plots
-./target/release/bsa-gprime \
-    --input data/bulks.vcf.gz \
-    --output-dir results/ \
-    --min-depth 10 \
-    --min-gq 20 \
-    --snps-only \
-    --plot \
-    --delta-snp-index \
-    --bed results/qtl_regions.bed \
-    --peaks-csv results/qtl_peaks.csv
-
-# 2. Outputs:
-#    - results/bulks_bsa_results.csv     Full results table
-#    - results/qtl_regions.bed           BED file for genome browsers
-#    - results/qtl_peaks.csv             QTL peak summary
-#    - results/bulks_bsa_results_neglog10p.png  -log10(p) Manhattan plot
-#    - results/bulks_bsa_results_gprime.png     G' Manhattan plot
-#    - results/bulks_bsa_results_delta_snp.png  Delta SNP-index plot
-
-# 3. Re-generate plots with different settings
-./target/release/bsa-gprime \
-    --plot-from results/bulks_bsa_results.csv \
-    --plot-dir results/svg_plots/ \
-    --plot-format svg \
-    --delta-snp-index
-```
 
 ## Performance
 
