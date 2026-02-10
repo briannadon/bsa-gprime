@@ -8,29 +8,27 @@ This tool calculates the G-statistic for identifying QTL (Quantitative Trait Loc
 
 ## Features
 
-- Fast VCF parsing with native support for gzipped files
-- G-statistic calculation for BSA-Seq data
-- Tricube kernel smoothing of G-statistics (G' computation)
-- Statistical significance testing via log-normal null distribution
-- Parametric and non-parametric null distribution estimation
-- Benjamini-Hochberg FDR correction
-- SNP index and delta SNP index calculation
-- Quality filtering (depth, genotype quality)
-- Biallelic SNP filtering
-- Parallel processing with configurable thread count 
-- CSV output for downstream analysis
-- BED output of significant QTL regions for genome browsers
-- QTL peak detection and summary CSV export
-- Built-in plotting: -log10(p-value), G'/G-stat, and delta SNP-index Manhattan plots (PNG or SVG)
-- Plot from existing results CSV without re-running the analysis (`--plot-from`)
+- Takes a VCF (or .vcf.gz) as input, with either 2 bulks (high + low) or 2 bulks + parents, and outputs a range of Bulk Segregant Analysis statistics as a CSV
+- Supports G, G', ΔSNP index outputs
+- Built-in plotting (with `--plot`) as well as optional python script for visualization
+- Fast and multi-threaded (written in Rust)
+
 
 ## Installation
 
-### Prerequisites
+### Pre-built binaries
 
-- Rust 1.70+ (install from https://rustup.rs/)
+Go to the [releases](https://github.com/briannadon/bsa-gprime/releases) page and download the binary that matches your computing system (Windows, Linux, MacOS supported - Windows ARM **not** supported).
+
+If you want to use it from anywhere on the command line, place the binary in your $PATH. 
 
 ### Build from source
+
+#### Prerequisites
+
+- Rust 1.70+ (install from https://rustup.rs/)
+- (Optional) Python3 with pandas, matplotlib, and numpy installed (for python plotting script)
+
 
 ```bash
 # Clone the repository
@@ -65,7 +63,7 @@ By default the tool runs the full significance testing pipeline (smoothing, p-va
 
 ### Parametric null distribution
 
-If you know the number of individuals per bulk, you can use the parametric method (Magwene et al. 2011). Specify the number of individuals with `--bulk-size` and the organism ploidy with `--ploidy` (default: 2). The effective population parameter n_s is computed as `bulk_size * ploidy`.
+If you know the number of individuals per bulk, you can use the parametric method for the null distribution calculations (Magwene et al. 2011). Specify the number of individuals with `--bulk-size` and the organism ploidy with `--ploidy` (default: 2). The effective population parameter n_s is computed as `bulk_size * ploidy`.
 
 ```bash
 ./target/release/bsa-gprime \
@@ -141,7 +139,7 @@ Your VCF file should have:
 
 Example VCF line:
 ```
-CP124720.1  100543  .  A  G  .  .  .  GT:AD:DP:GQ  0/0:45,55:100:30  1/1:15,85:100:40
+Chr1  100543  .  A  G  .  .  .  GT:AD:DP:GQ  0/0:45,55:100:30  1/1:15,85:100:40
 ```
 
 ### Output Format
@@ -187,6 +185,8 @@ Each line contains: `chrom  start  end  QTL_region_N  score  .` where coordinate
 ## Visualization
 
 Built-in plotting generates faceted Manhattan plots directly from the Rust binary. No external dependencies are required.
+
+You may optionally use the python `visualize_qtl.py` script in `scripts/` to plot the results from the output CSV. Requires Python3, Pandas, Numpy, Matplotlib.
 
 ### Plotting with analysis
 
@@ -234,26 +234,24 @@ Data is automatically downsampled to the output resolution using min-max bucketi
 
 A Python script (`scripts/visualize_qtl.py`) is also included for alternative visualization. It requires Python 3.9+ with matplotlib and related dependencies (see `scripts/environment.yml` or `scripts/requirements.txt`). The built-in Rust plotting is recommended for most use cases.
 
-## Significance Testing
+## Statistical Details
 
-The significance testing pipeline follows Magwene et al. (2011):
+All statistical calculations and theoretical underpinnings follow [Magwene, Willis, and Kelly 2011](https://pmc.ncbi.nlm.nih.gov/articles/PMC3207950/). Refer to equations 8-12.
 
-1. **Tricube kernel smoothing**: G-statistics are smoothed per-chromosome using a tricube kernel with a configurable bandwidth (default 1 Mb). This produces the G' statistic.
+1. **Tricube kernel smoothing**: G-statistics are smoothed per-chromosome using a tricube kernel with a configurable bandwidth (default 1 Mb). This produces the G' statistic from the raw G statistic values.
 
 2. **Null distribution estimation**: The null distribution of G' is modeled as log-normal. Two methods are available:
-   - **Non-parametric** (default): Robust estimation from the observed G' distribution using the median and left-MAD, with Hampel's outlier rule to exclude QTL signals. This method is recommended for most use cases as it directly estimates the null distribution from the data.
-   - **Parametric**: Requires `--bulk-size` (and optionally `--ploidy`). Computes expected mean and variance using equations 8-9 from Magwene et al. (2011):
-     - **Equation 8**: E[G] = 1 + C/(2n_s)
-     - **Equation 9**: Var[G] = 2 + 1/(2C) + (1+2C)/n_s + C(4n_s-1)/(8n_s^3)
+   - **Non-parametric** (default): Robust estimation from the observed G' distribution using the median and left-MAD, with Hampel's outlier rule to exclude QTL signals. This method is recommended for most use cases as it directly estimates the null distribution from the data, and requires less input from you. It is also 
+   - **Parametric**: Requires `--bulk-size` (and optionally `--ploidy`). Computes expected mean and variance using equations 8-9.
      - For smoothed G' values, variance is scaled by the sum of squared normalized kernel weights per equation 12. The implementation computes this automatically from the SNP density and smoothing window.
 
 3. **P-value computation**: Survival function (1 - CDF) of the fitted log-normal distribution evaluated at each G' value.
 
 4. **FDR correction**: Benjamini-Hochberg procedure to control the false discovery rate. SNPs with q-value below the threshold (default 0.05) are marked as significant.
 
-### Statistical Details
+### Statistics implementation
 
-The implementation provides three methods for estimating the null distribution:
+The implementation provides three methods for estimating the null distribution. Refer to 
 
 1. **`estimate_null_parametric()`**: For raw G-statistics using equations 8-9
 2. **`estimate_null_parametric_gprime()`**: For smoothed G' values, accounts for variance reduction via the sum of squared kernel weights
@@ -261,7 +259,7 @@ The implementation provides three methods for estimating the null distribution:
 
 #### Robust Empirical Estimator (Recommended)
 
-The robust estimator implements the full procedure from Magwene et al. (2011) step 3b:
+This method does the following:
 
 1. **Log-transform**: W_G' = ln(G'_observed)
 2. **Compute median & left-MAD**: MAD_l(W_G') = Median(|w_i - Median|) for w_i <= Median
@@ -284,8 +282,6 @@ The sum of squared normalized kernel weights is computed as:
 - sum(k_j^2) = sum(w_j^2) / (sum(w_j))^2
 
 For typical SNP densities (1 SNP per 1-10 kb), this ranges from 0.1 to 0.5, meaning smoothing reduces variance by a factor of 2-10.
-
-> **Note**: The parametric G' method uses Var[G'] ~ Var[G] x sum(k_j^2). The full equation 12 also includes a covariance term for linked SNPs, which is omitted for computational efficiency. This is a conservative approximation.
 
 ## Example Workflow
 
@@ -320,7 +316,7 @@ For typical SNP densities (1 SNP per 1-10 kb), this ranges from 0.1 to 0.5, mean
 
 ## Performance
 
-- Processes ~10M variants in 5-15 minutes on a modern laptop
+- Processes ~10M variants in 5-15 minutes on a modern laptop - even faster (2 min or so) with 4+ cores.
 - Parallel G-statistic calculation, smoothing, and p-value computation via rayon (`--threads`)
 - Handles gzipped VCF files natively (no decompression needed)
 - Memory-efficient streaming parser
@@ -370,16 +366,10 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 
 ## References
 
-Magwene PM, Willis JH, Kelly JK (2011) The Statistics of Bulk Segregant Analysis Using Next Generation Sequencing. *PLOS Computational Biology* 7(11): e1002255. https://doi.org/10.1371/journal.pcbi.1002255
-
-## Citation
-
-If you use this tool in your research, please cite the original G-statistic paper:
 ```
 Magwene PM, Willis JH, Kelly JK (2011) The Statistics of Bulk Segregant Analysis
 Using Next Generation Sequencing. PLOS Computational Biology 7(11): e1002255.
 ```
-
 ## Support
 
 For issues or questions, please open an issue on the GitHub repository.
