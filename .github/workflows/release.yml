@@ -28,11 +28,11 @@ jobs:
             archive: tar.gz
             cross: true
           - name: macOS x86_64
-            runner: macos-13
+            runner: macos-15-intel
             target: x86_64-apple-darwin
             archive: tar.gz
           - name: macOS ARM64
-            runner: macos-14
+            runner: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
           - name: Windows x86_64
@@ -75,6 +75,7 @@ jobs:
             mingw-w64-x86_64-bzip2
             mingw-w64-x86_64-xz
             mingw-w64-x86_64-curl
+            mingw-w64-x86_64-openssl
             mingw-w64-x86_64-pkg-config
 
       - name: Configure Windows environment
